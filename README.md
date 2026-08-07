@@ -93,6 +93,37 @@ run_matchup(PokerBot(), lambda rng: MyRLCardAdapter(), num_hands=2000, seed=7)
 The `Strategy` interface (decide/on_hand_end) is the only boundary a third-party
 bot must implement to be comparable.
 
+### Measured: pokr vs PyPokerEngine's official example bots
+
+`pokr` also plays inside the external **PyPokerEngine** engine (its own dealer,
+rules, and side-pot logic) against the framework's own example bots, via the
+`PokrPlayer` adapter (`pokr/ppe.py`). Run it with:
+
+    python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7
+
+Heads-up, 2000 hands each, 10 MC iters, 200bb stacks (rebuy sessions since
+PyPokerEngine ends a game at the first bust):
+
+| opponent | pokr bb/100 | read |
+|---|---|---|
+| HonestPlayer | **+1.9** | marginal win vs the equity-aware bot |
+| FishPlayer | **+27.5** | strong edge vs a never-folding fish |
+| RandomPlayer | **+29.9** | solid edge vs random play |
+
+6-max table (pokr + one of each), 2000 hands:
+
+| player | bb/100 |
+|---|---|
+| HonestPlayer | +47.6 |
+| **pokr** | **+37.6** |
+| FishPlayer | +38.9 / −24.3 |
+| RandomPlayer | −50.0 ×2 |
+
+Takeaway: pokr is profitable against all three external bots, heads-up and at
+a full table. The edge is comfortable against the weak bots (fish, random) and
+thin against the equity-aware one (+1.9), which matches the internal finding
+that tight/equity-aware opponents are the bot's hardest matchup.
+
 ## Module map
 
 - `pokr/cards.py` — Card, Deck, hand evaluator, Monte Carlo equity
