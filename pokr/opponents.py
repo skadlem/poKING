@@ -122,3 +122,55 @@ class Maniac(BaseStrategy):
             amt = min(max(state.pot, bet_la[0].min_amount), bet_la[0].max_amount)
             return Action.bet(amt, "maniac bet")
         return Action.check("maniac check")
+
+
+from .models import OpponentModel
+
+
+class LeakHunter(BaseStrategy):
+    """Exploitability proxy: models the bot's action frequencies and counter-adjusts."""
+
+    def __init__(self, rng: random.Random | None = None, target_seat: int = 0) -> None:
+        self.rng = rng or random.Random()
+        self.target_seat = target_seat
+        self.model = OpponentModel()
+
+    def on_hand_end(self, result, my_seat):
+        self.model.update(result, my_seat, self.target_seat)
+
+    def decide(self, state, player_id):
+        p = state.players[player_id]
+        to_call = state.current_bet - p.street_committed
+        s = self.model.summary()
+        if s.hands_observed < 5:
+            if to_call > 0:
+                return Action.call(min(to_call, p.stack), "hunter default call")
+            return Action.check("hunter default check")
+
+        bluff_mode = s.fold_rate_postflop > 0.6
+        tight_mode = s.aggression_freq > 0.6
+        call_wide = s.vpip > 0.5
+
+        if state.street != "preflop":
+            score = evaluate_hand(p.hole + state.community)
+            cat = score[0]
+        else:
+            cat = 2 if _is_premium(p.hole) else 0
+
+        if to_call > 0:
+            if tight_mode and cat < 1:
+                return Action.fold("hunter folds to aggressive target")
+            if call_wide and cat >= 1:
+                return Action.call(min(to_call, p.stack), "hunter calls wide vs loose target")
+            if cat >= 2 or not tight_mode:
+                return Action.call(min(to_call, p.stack), "hunter call")
+            return Action.fold("hunter fold")
+        # checked to
+        bet_la = [x for x in state.legal_actions if x.action_type == ActionType.BET]
+        if bluff_mode and bet_la and (cat < 2 or self.rng.random() < 0.5):
+            amt = min(max(int(state.pot * 0.5), bet_la[0].min_amount), bet_la[0].max_amount)
+            return Action.bet(amt, "hunter bluff vs folder")
+        if cat >= 2 and bet_la:
+            amt = min(max(int(state.pot * 0.66), bet_la[0].min_amount), bet_la[0].max_amount)
+            return Action.bet(amt, "hunter value bet")
+        return Action.check("hunter check")
