@@ -9,6 +9,7 @@ import numpy as np
 
 from .bot import PokerBot
 from .cards import evaluate_hand, hand_name
+from .connector import build_strategy
 from .engine import HandResult, PokerGame
 from .models import OpponentModel
 from .opponents import (
@@ -190,10 +191,12 @@ LINEUP_ABBREVS = {
     "random": random_factory,
     "leak": leak_hunter_factory,
     "self": lambda rng: PokerBot(rng),
+    "rlcard": lambda rng: build_strategy("rlcard"),
 }
 LINEUP_NAMES = {
     "cs": "CallingStation", "tag": "TightAggressive", "maniac": "Maniac",
     "random": "RandomBot", "leak": "LeakHunter", "self": "PokerBot",
+    "rlcard": "RlcardRandom",
 }
 
 

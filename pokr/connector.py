@@ -22,3 +22,9 @@ def build_strategy(name: str) -> Strategy:
 
 def available_plugins() -> list[str]:
     return sorted(_plugins)
+
+
+# Import at the bottom so the rlcard plugin registers itself when the
+# connector is imported. pokr.rlcard_adapter imports rlcard lazily, so this
+# stays optional.
+from . import rlcard_adapter  # noqa: E402,F401
