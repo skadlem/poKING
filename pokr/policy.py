@@ -24,10 +24,11 @@ _BOT_THRESHOLD = 0.6
 # discounted by up to _RANGE_DISCOUNT_MAX. Loose opponents' bets are close to
 # random; no discount.
 _RANGE_VPIP_FULL = 0.3       # vpip at or below this counts as fully tight
-_RANGE_AGGR_LO = 0.3         # aggression at or below this counts as not aggressive
-_RANGE_AGGR_SPAN = 0.5       # aggression span over _RANGE_AGGR_LO to reach full aggression
+_RANGE_AGGR_LO = 0.15        # aggression at or below this counts as not aggressive
+_RANGE_AGGR_SPAN = 0.4       # aggression span over _RANGE_AGGR_LO to reach full aggression
 _RANGE_DISCOUNT_MAX = 0.3
 _RANGE_FOLD_STRENGTH = 0.25  # at/above this range strength, a -EV call folds (no bluff-raise rescue)
+_RANGE_CBET_FOLD_MAX = 0.4   # opponents who rarely fold to c-bets call down with strong hands
 
 
 @dataclass
@@ -67,19 +68,27 @@ class Policy:
         # stronger than a random hand. Tight + aggressive opponents (low VPIP,
         # high postflop aggression) bet a much stronger range, so discount equity
         # against them; loose opponents' bets are close to random (no discount).
+        strong_range = False
         if to_call > 0 and summary is not None and summary.hands_observed >= 5 \
                 and state.street != "preflop":
             tight = max(0.0, 1.0 - summary.vpip / _RANGE_VPIP_FULL)
             aggressive = max(0.0, min(1.0, (summary.aggression_freq - _RANGE_AGGR_LO) / _RANGE_AGGR_SPAN))
             strength = min(1.0, tight * aggressive)
             equity *= 1.0 - _RANGE_DISCOUNT_MAX * strength
+            # Also treat a tight opponent who rarely folds to c-bets as betting a
+            # strong range: they call down with made hands, so our marginal
+            # holdings are dominated. Combined with low VPIP, this is the
+            # tight-aggressive "win small, lose big" profile.
+            if summary.fold_to_cbet > 0 and summary.fold_to_cbet < _RANGE_CBET_FOLD_MAX:
+                strength = max(strength, tight * 0.5)
             # Facing a strong betting range (tight + aggressive) with a -EV call,
             # don't rescue the hand with a bluff-raise: fold. Raising a
             # tight-aggressive bettor's strong range is -EV (the "win small, lose
             # big" leak measured vs the TAG archetype). Postflop only: preflop
             # raises carry less range information, and keeping preflop behavior
             # unchanged preserves the self-play mirror signal.
-            if strength >= _RANGE_FOLD_STRENGTH:
+            strong_range = strength >= _RANGE_FOLD_STRENGTH
+            if strong_range:
                 call_ev = equity * pot - (1.0 - equity) * to_call
                 if call_ev <= 0:
                     return Action.fold("fold vs strong range")
