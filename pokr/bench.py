@@ -103,21 +103,31 @@ def run_benchmark(
     mc_iters: int | None = None,
 ) -> list[MatchupReport]:
     """Run the full benchmark. mc_iters, when given, is applied to self-play
-    opponents (the primary bot is passed in as `bot` and already configured)."""
+    opponents and to fresh clones of the primary bot. A FRESH bot is used per
+    matchup: reusing one bot across matchups pollutes its per-seat opponent
+    models (the same seat index holds different opponents in different
+    matchups), which distorts results (measured: TAG matchup -210 with a clean
+    bot vs -265 with a polluted one)."""
+    def fresh_bot():
+        if isinstance(bot, PokerBot):
+            return PokerBot(random.Random(seed), risk_cfg=bot.policy.risk_cfg,
+                            num_players=bot.num_players, mc_iters=bot.policy.mc_iters)
+        return bot
+
     factories = list(opponent_factories) if opponent_factories else list(_DEFAULT_FACTORIES)
     reports = [
-        run_matchup(bot, f, num_hands, seed + i * 97, num_seats=num_seats, buy_in=buy_in,
+        run_matchup(fresh_bot(), f, num_hands, seed + i * 97, num_seats=num_seats, buy_in=buy_in,
                     name=f.__name__)
         for i, f in enumerate(factories)
     ]
     if include_self:
         def self_factory(rng):
             return PokerBot(rng, mc_iters=mc_iters) if mc_iters is not None else PokerBot(rng)
-        reports.append(run_matchup(bot, self_factory, num_hands,
+        reports.append(run_matchup(fresh_bot(), self_factory, num_hands,
                                    seed + 5000, num_seats=num_seats, buy_in=buy_in,
                                    name="self_play"))
     if include_leak_hunter:
-        reports.append(run_matchup(bot, leak_hunter_factory, num_hands,
+        reports.append(run_matchup(fresh_bot(), leak_hunter_factory, num_hands,
                                    seed + 9000, num_seats=num_seats, buy_in=buy_in,
                                    name="leak_hunter"))
     return reports
