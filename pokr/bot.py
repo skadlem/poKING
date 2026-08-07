@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 
 from .botdetect import BotDetector, DetectionResult
+from .bankroll import BankrollManager
 from .models import ModelManager
 from .policy import Policy
 from .risk import RiskConfig
@@ -25,6 +26,7 @@ class PokerBot(BaseStrategy):
         risk_cfg: RiskConfig | None = None,
         num_players: int = 6,
         mc_iters: int = 150,
+        bankroll_manager: BankrollManager | None = None,
     ) -> None:
         self.rng = rng or random.Random()
         self.models = ModelManager(num_players)
@@ -32,6 +34,15 @@ class PokerBot(BaseStrategy):
         self.policy = Policy(self.rng, risk_cfg, mc_iters)
         self.num_players = num_players
         self.mirror_mode = False
+        self.bankroll_manager = bankroll_manager
+
+    def begin_session(self, bankroll: float) -> None:
+        """Feed the session budget from the bankroll manager (no-op without one).
+
+        The budget feeds Kelly sizing through policy.risk_cfg.session_budget.
+        """
+        if self.bankroll_manager is not None:
+            self.policy.risk_cfg.session_budget = self.bankroll_manager.session_budget(bankroll)
 
     def decide(self, state, player_id):
         opponents = [q.id for q in state.players if q.id != player_id and not q.folded]
