@@ -125,3 +125,31 @@ def evaluate_hand(cards: Sequence[Card]) -> HandScore:
 
 def hand_name(score: HandScore) -> str:
     return _CATEGORY_NAMES[score[0]]
+
+
+# ponytail: pure-python equity; njit the sample loop when benches are too slow
+def monte_carlo_equity(
+    hole: Sequence[Card],
+    board: Sequence[Card],
+    num_opponents: int,
+    iterations: int,
+    rng: random.Random,
+) -> float:
+    """Fraction of runouts where hole+board wins (ties count half) vs num_opponents random hands."""
+    dead = set(hole) | set(board)
+    deck = [c for c in all_cards() if c not in dead]
+    need_board = 5 - len(board)
+    total = 0.0
+    for _ in range(iterations):
+        sample = rng.sample(deck, num_opponents * 2 + need_board)
+        full_board = list(board) + sample[num_opponents * 2 :]
+        mine = evaluate_hand(list(hole) + full_board)
+        best_opp = max(
+            evaluate_hand(sample[2 * i : 2 * i + 2] + full_board)
+            for i in range(num_opponents)
+        )
+        if mine > best_opp:
+            total += 1.0
+        elif mine == best_opp:
+            total += 0.5
+    return total / iterations
