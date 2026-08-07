@@ -11,12 +11,12 @@ def test_action_constructors():
 
 
 def test_action_is_frozen():
+    from dataclasses import FrozenInstanceError
+    import pytest
+
     a = Action.fold()
-    try:
+    with pytest.raises(FrozenInstanceError):
         a.amount = 5
-        assert False
-    except Exception:
-        pass
 
 
 def test_base_strategy_defaults():
