@@ -161,7 +161,11 @@ class PokerGame:
             if p.folded or p.all_in:
                 current = (current + 1) % n
                 if current == first_actor:
-                    break
+                    fa = state.players[first_actor]
+                    if fa.folded or fa.all_in or (
+                        fa.acted_round and fa.street_committed == state.current_bet
+                    ):
+                        break
                 continue
             if p.acted_round and p.street_committed == state.current_bet:
                 break

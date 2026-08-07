@@ -78,7 +78,7 @@ def test_tag_checks_junk_when_unraised():
          Scripted([Action.fold("f")]),
          Scripted([Action.call(1, "c"), Action.check("x"), Action.check("x"),
                    Action.check("x"), Action.check("x")])],
-        deck_cards=["7h", "2d", "3c", "4c", "5c", "6c", "7c", "8c", "9c", "Tc", "Jc"],
+        deck_cards=["7h", "2d", "3d", "6h", "9s", "Qc", "Ks", "3c", "8d", "Jh", "Qh"],
         dealer=1,
     )
     r = g.play_hand()

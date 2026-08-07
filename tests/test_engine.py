@@ -135,3 +135,23 @@ def test_community_dealt_progressively():
     )
     r = g.play_hand()
     assert len(r.community) == 5
+
+
+def test_first_actor_responds_to_bet_after_wrap():
+    # Regression test for the engine wrap bug: 6 players, dealer=0 (SB=1, BB=2, first preflop=3).
+    # Preflop: 3,4,5,0 fold; SB (1) calls 1; BB (2) checks -> heads-up 1 vs 2.
+    # Flop: first_actor=1 (SB) checks, BB bets 20, wrap over folded 3,4,5,0 back to 1.
+    # Correct poker: seat 1 must respond to the bet (here: fold).
+    g = make_game(
+        [Scripted([Action.fold("f")]),                        # 0 button folds preflop
+         Scripted([Action.call(1, "c"), Action.check("x"), Action.fold("f")]),  # 1 SB
+         Scripted([Action.check("x"), Action.bet(20, "b")]),  # 2 BB
+         Scripted([Action.fold("f")]),                        # 3 folds preflop
+         Scripted([Action.fold("f")]),                        # 4 folds preflop
+         Scripted([Action.fold("f")])],                       # 5 folds preflop
+        stacks=[200] * 6, dealer=0,
+    )
+    r = g.play_hand()
+    seat1 = [a for (t, s, a) in r.actions if t == 1 and s == "flop"]
+    assert [a.action_type for a in seat1] == [ActionType.CHECK, ActionType.FOLD]
+    assert r.winnings == [0, -2, 2, 0, 0, 0]
