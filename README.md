@@ -17,6 +17,31 @@ tight-aggressive, maniac, random, self-play, and the leak hunter
 (exploitability proxy). `--mc-iters` sets the Monte Carlo equity iterations
 per decision (default 150; use 10-30 for fast exploratory runs).
 
+## Play a game against a mixed lineup
+
+The bot can sit at a real 6-max table against a chosen mix of other bots,
+report how it actually played, and replay individual hands:
+
+    python -m pokr.bench --lineup tag,tag,maniac,cs,random --hands 1000 --mc-iters 10 --replay 17
+
+`--lineup` takes one abbreviation per opponent seat (`cs`, `tag`, `maniac`,
+`random`, `leak`, `self`). The report shows your profit (bb/100), hands won,
+the bot's own VPIP/PFR/aggression/fold stats, and with `--replay N` a
+human-readable transcript of hand N (blinds, every action with its reason,
+board, showdown, net result). Example:
+
+    game vs lineup [TightAggressive, TightAggressive, Maniac, CallingStation, RandomBot]  (1000 hands)
+      you: -5703.5 bb total, -570.35 bb/100, won 10.2% of hands, var 608196.0
+      your play: VPIP 52.8%  PFR 16.1%  postflop aggression 0.65  fold-to-cbet 40%  postflop fold 23%
+
+    --- Hand #17 of 1000 (dealer RandomBot) ---
+      blinds: You(pokr) 1 / TightAggressive 2
+      TightAggressive preflop  fold  [tag folds junk]
+      Maniac       preflop  raise 100  [maniac raise]
+      ...
+      CallingStation wins 203 with two pair (Ah Qc)
+      net: You(pokr) -1 TightAggressive -2 TightAggressive +0 Maniac -200 CallingStation +203 RandomBot +0
+
 ## Benchmark results
 
 Reference run: seed 7, 2000 hands per matchup, `mc_iters=10`, 6-max, 200bb
