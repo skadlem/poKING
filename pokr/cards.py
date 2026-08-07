@@ -61,3 +61,67 @@ class Deck:
     @property
     def remaining(self) -> int:
         return len(self._cards)
+
+from itertools import combinations
+
+HIGH_CARD, PAIR, TWO_PAIR, TRIPS, STRAIGHT, FLUSH, FULL_HOUSE, QUADS, STRAIGHT_FLUSH = range(9)
+
+_CATEGORY_NAMES = [
+    "high card", "one pair", "two pair", "three of a kind",
+    "straight", "flush", "full house", "four of a kind", "straight flush",
+]
+
+HandScore = tuple[int, ...]
+
+
+def evaluate_5(cards: Sequence[Card]) -> HandScore:
+    """Score exactly 5 cards. Higher tuple wins; lexicographic comparison is hand comparison."""
+    ranks = sorted((c.rank for c in cards), reverse=True)
+    suits = [c.suit for c in cards]
+    is_flush = len(set(suits)) == 1
+    distinct = sorted(set(ranks), reverse=True)
+    is_straight = False
+    straight_high = 0
+    if len(distinct) == 5:
+        if distinct[0] - distinct[4] == 4:
+            is_straight = True
+            straight_high = distinct[0]
+        elif distinct == [14, 5, 4, 3, 2]:
+            is_straight = True
+            straight_high = 5
+    if is_flush and is_straight:
+        return (STRAIGHT_FLUSH, straight_high)
+    counts = sorted(((ranks.count(r), r) for r in set(ranks)), reverse=True)
+    if counts[0][0] == 4:
+        return (QUADS, counts[0][1], counts[1][1])
+    if counts[0][0] == 3 and counts[1][0] == 2:
+        return (FULL_HOUSE, counts[0][1], counts[1][1])
+    if is_flush:
+        return (FLUSH, *ranks)
+    if is_straight:
+        return (STRAIGHT, straight_high)
+    if counts[0][0] == 3:
+        return (TRIPS, counts[0][1], *[r for _, r in counts[1:]])
+    if counts[0][0] == 2 and counts[1][0] == 2:
+        return (TWO_PAIR, counts[0][1], counts[1][1], counts[2][1])
+    if counts[0][0] == 2:
+        return (PAIR, counts[0][1], *[r for r in ranks if r != counts[0][1]])
+    return (HIGH_CARD, *ranks)
+
+
+def evaluate_hand(cards: Sequence[Card]) -> HandScore:
+    """Best 5-card hand from 5..7 cards."""
+    cards = list(cards)
+    if len(cards) == 5:
+        return evaluate_5(cards)
+    best: HandScore | None = None
+    for combo in combinations(cards, 5):
+        s = evaluate_5(combo)
+        if best is None or s > best:
+            best = s
+    assert best is not None
+    return best
+
+
+def hand_name(score: HandScore) -> str:
+    return _CATEGORY_NAMES[score[0]]
