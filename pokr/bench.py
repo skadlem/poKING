@@ -100,7 +100,10 @@ def run_benchmark(
     include_leak_hunter: bool = True,
     num_seats: int = 6,
     buy_in: int = 200,
+    mc_iters: int | None = None,
 ) -> list[MatchupReport]:
+    """Run the full benchmark. mc_iters, when given, is applied to self-play
+    opponents (the primary bot is passed in as `bot` and already configured)."""
     factories = list(opponent_factories) if opponent_factories else list(_DEFAULT_FACTORIES)
     reports = [
         run_matchup(bot, f, num_hands, seed + i * 97, num_seats=num_seats, buy_in=buy_in,
@@ -108,7 +111,9 @@ def run_benchmark(
         for i, f in enumerate(factories)
     ]
     if include_self:
-        reports.append(run_matchup(bot, lambda rng: PokerBot(rng), num_hands,
+        def self_factory(rng):
+            return PokerBot(rng, mc_iters=mc_iters) if mc_iters is not None else PokerBot(rng)
+        reports.append(run_matchup(bot, self_factory, num_hands,
                                    seed + 5000, num_seats=num_seats, buy_in=buy_in,
                                    name="self_play"))
     if include_leak_hunter:
@@ -130,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     reports = run_benchmark(PokerBot(random.Random(args.seed), mc_iters=args.mc_iters),
                             args.hands, args.seed,
-                            num_seats=args.seats, buy_in=args.buy_in)
+                            num_seats=args.seats, buy_in=args.buy_in, mc_iters=args.mc_iters)
     print(f"{'matchup':<16}{'hands':>6}{'total_bb':>10}{'bb/100':>10}{'win%':>8}{'var':>10}")
     for r in reports:
         print(f"{r.name:<16}{r.hands:>6}{r.total_bb:>10.2f}{r.bb_per_100:>10.2f}"
