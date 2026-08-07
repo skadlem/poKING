@@ -2,11 +2,16 @@ import random
 
 from pokr.bench import (
     MatchupReport,
+    bot_own_stats,
     calling_station_factory,
+    format_hand,
     leak_hunter_factory,
+    maniac_factory,
+    play_session,
     random_factory,
     run_benchmark,
     run_matchup,
+    tight_aggressive_factory,
 )
 from pokr.bot import PokerBot
 from pokr.opponents import CallingStation
@@ -48,3 +53,29 @@ def test_seat_rotation_dealer_cycles():
                       rng=random.Random(h), initial_dealer=h % 6)
         seen.add(g.initial_dealer)
     assert seen == {0, 1, 2, 3, 4, 5}
+
+
+def test_play_session_mixed_lineup():
+    # Game benchmark: bot at seat 0 vs a mixed lineup; session is deterministic
+    # and reports the bot's own play stats.
+    factories = [calling_station_factory, tight_aggressive_factory,
+                 maniac_factory, random_factory, leak_hunter_factory]
+    bb1, results1 = play_session(PokerBot(random.Random(1), mc_iters=10),
+                                 factories, 20, seed=9)
+    bb2, results2 = play_session(PokerBot(random.Random(1), mc_iters=10),
+                                 factories, 20, seed=9)
+    assert bb1 == bb2
+    assert len(results1) == 20
+    stats = bot_own_stats(results1, seat=0)
+    assert stats["hands"] == 20
+    assert 0.0 <= stats["vpip"] <= 1.0
+    assert 0.0 <= stats["aggression_freq"] <= 1.0
+
+
+def test_format_hand_uses_real_dealer():
+    _, results = play_session(PokerBot(random.Random(1), mc_iters=10),
+                              [calling_station_factory] * 5, 5, seed=3)
+    text = format_hand(results[2], ["you"] + ["cs"] * 5,
+                       hand_label="Hand #2 of 5")
+    assert "Hand #2 of 5" in text
+    assert "dealer" in text

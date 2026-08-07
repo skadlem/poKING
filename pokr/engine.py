@@ -57,6 +57,7 @@ class HandResult:
     actions: list[tuple[int, str, Action]]
     winnings: list[int]
     big_blind: int
+    dealer: int = 0
 
 
 class PokerGame:
@@ -129,6 +130,7 @@ class PokerGame:
             actions=list(state.action_history),
             winnings=[e - s for e, s in zip(ending, starting)],
             big_blind=self.big_blind,
+            dealer=self.initial_dealer,
         )
         for i, strat in enumerate(self.strategies):
             strat.on_hand_end(result, i)

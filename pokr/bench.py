@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import random
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 
 from .bot import PokerBot
-from .engine import PokerGame
+from .cards import evaluate_hand, hand_name
+from .engine import HandResult, PokerGame
+from .models import OpponentModel
 from .opponents import (
     CallingStation,
     LeakHunter,
@@ -16,7 +18,7 @@ from .opponents import (
     RandomBot,
     TightAggressive,
 )
-from .strategy import Strategy
+from .strategy import ActionType, Strategy
 
 
 @dataclass
@@ -83,6 +85,118 @@ def run_matchup(
                          num_hands, total, bb_per_100, win_rate, var)
 
 
+def play_session(
+    bot: Strategy,
+    opponent_factories: Sequence[Callable[[random.Random], Strategy]],
+    num_hands: int,
+    seed: int,
+    num_seats: int = 6,
+    buy_in: int = 200,
+    small_blind: int = 1,
+    big_blind: int = 2,
+) -> tuple[list[float], list[HandResult]]:
+    """Play num_hands of 6-max poker: `bot` at seat 0, one opponent factory per
+    remaining seat (reused across hands so models persist). Returns per-hand bb
+    for seat 0 and the full HandResult list (for replay/analysis)."""
+    assert len(opponent_factories) == num_seats - 1, \
+        f"need {num_seats - 1} opponent factories for {num_seats} seats"
+    rng = random.Random(seed)
+    lineup = [bot] + [f(random.Random(seed + 1000 * (i + 1)))
+                      for i, f in enumerate(opponent_factories)]
+    stacks = [buy_in] * num_seats
+    per_hand_bb: list[float] = []
+    results: list[HandResult] = []
+    for h in range(num_hands):
+        game = PokerGame(lineup, stacks, small_blind, big_blind, rng,
+                         initial_dealer=h % num_seats)
+        result = game.play_hand()
+        stacks = _rebuy(result.ending_stacks, buy_in)
+        per_hand_bb.append(result.winnings[0] / big_blind)
+        results.append(result)
+    return per_hand_bb, results
+
+
+def run_mixed_matchup(
+    bot: Strategy,
+    opponent_factories: Sequence[Callable[[random.Random], Strategy]],
+    num_hands: int,
+    seed: int,
+    num_seats: int = 6,
+    buy_in: int = 200,
+    name: str = "mixed_lineup",
+) -> MatchupReport:
+    """Game benchmark: the bot at a full 6-max table against a mixed lineup of
+    other bots (one factory per opponent seat)."""
+    per_hand_bb, _ = play_session(bot, opponent_factories, num_hands, seed,
+                                  num_seats=num_seats, buy_in=buy_in)
+    total = sum(per_hand_bb)
+    bb_per_100 = total / num_hands * 100.0
+    win_rate = sum(1 for w in per_hand_bb if w > 0) / num_hands
+    var = float(np.var(per_hand_bb)) if num_hands > 1 else 0.0
+    return MatchupReport(name, num_hands, total, bb_per_100, win_rate, var)
+
+
+def bot_own_stats(results: Sequence[HandResult], seat: int = 0) -> dict:
+    """How the bot itself played: VPIP/PFR/aggression/fold rates from its own
+    actions across the session (observer id -1 so it never equals the target)."""
+    m = OpponentModel()
+    for r in results:
+        m.update(r, observer_id=-1, target_id=seat)
+    s = m.summary()
+    return {
+        "hands": s.hands_observed,
+        "vpip": s.vpip,
+        "pfr": s.pfr,
+        "aggression_freq": s.aggression_freq,
+        "fold_to_cbet": s.fold_to_cbet,
+        "fold_rate_postflop": s.fold_rate_postflop,
+    }
+
+
+def format_hand(result: HandResult, seat_names: Sequence[str] | None = None,
+                hand_label: str | None = None) -> str:
+    """Human-readable replay of one hand: blinds, every action with reason,
+    streets, showdown, and net winnings."""
+    n = len(result.starting_stacks)
+    names = seat_names or [f"seat{i}" for i in range(n)]
+    label = hand_label or f"Hand #{result.hand_number}"
+    lines = [f"--- {label} (dealer {names[result.dealer]}) ---"]
+    if n == 2:
+        sb, bb = result.dealer, (result.dealer + 1) % n
+    else:
+        sb, bb = (result.dealer + 1) % n, (result.dealer + 2) % n
+    lines.append(f"  blinds: {names[sb]} {result.big_blind // 2} / {names[bb]} {result.big_blind}")
+    for (pid, street, action) in result.actions:
+        amt = "" if action.amount == 0 else f" {action.amount}"
+        reason = f"  [{action.reason}]" if action.reason else ""
+        lines.append(f"  {names[pid]:<12} {street:<8} {action.action_type.value}{amt}{reason}")
+    if len(result.community) >= 3:
+        lines.append(f"  board: {' '.join(map(str, result.community))}")
+    if len(result.hole) > 0:
+        showdown = [i for i, w in enumerate(result.winnings) if w > 0]
+        for i in showdown:
+            score = evaluate_hand(result.hole[i] + result.community)
+            lines.append(f"  {names[i]} wins {result.winnings[i]} with "
+                         f"{hand_name(score)} ({' '.join(map(str, result.hole[i]))})")
+    lines.append(f"  net: {' '.join(f'{names[i]} {w:+d}' for i, w in enumerate(result.winnings))}")
+    return "\n".join(lines)
+
+
+# Lineup abbreviations for the CLI: name -> factory
+LINEUP_ABBREVS = {
+    "cs": calling_station_factory,
+    "tag": tight_aggressive_factory,
+    "maniac": maniac_factory,
+    "random": random_factory,
+    "leak": leak_hunter_factory,
+    "self": lambda rng: PokerBot(rng),
+}
+LINEUP_NAMES = {
+    "cs": "CallingStation", "tag": "TightAggressive", "maniac": "Maniac",
+    "random": "RandomBot", "leak": "LeakHunter", "self": "PokerBot",
+}
+
+
 _DEFAULT_FACTORIES = [
     calling_station_factory,
     tight_aggressive_factory,
@@ -142,7 +256,52 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mc-iters", type=int, default=150,
                     help="Monte Carlo equity iterations per decision (default 150; "
                          "lower for faster runs, e.g. 10-30)")
+    ap.add_argument("--lineup", type=str, default=None,
+                    help="Play a real 6-max game vs a mixed lineup, e.g. "
+                         "'cs,tag,tag,maniac,random' (one abbr per opponent seat: "
+                         "cs, tag, maniac, random, leak, self)")
+    ap.add_argument("--replay", type=int, default=None,
+                    help="With --lineup: print a human-readable replay of hand N "
+                         "(0-based) from the session")
     args = ap.parse_args(argv)
+
+    if args.lineup:
+        abbrs = [a.strip() for a in args.lineup.split(",")]
+        if len(abbrs) != args.seats - 1:
+            print(f"error: --lineup needs {args.seats - 1} abbreviations for "
+                  f"{args.seats} seats, got {len(abbrs)}")
+            return 2
+        for a in abbrs:
+            if a not in LINEUP_ABBREVS:
+                print(f"error: unknown lineup abbr {a!r}; use one of {sorted(LINEUP_ABBREVS)}")
+                return 2
+        factories = [LINEUP_ABBREVS[a] for a in abbrs]
+        names = ["You(pokr)"] + [LINEUP_NAMES[a] for a in abbrs]
+        bot = PokerBot(random.Random(args.seed), mc_iters=args.mc_iters)
+        per_hand_bb, results = play_session(bot, factories, args.hands, args.seed,
+                                            num_seats=args.seats, buy_in=args.buy_in)
+        total = sum(per_hand_bb)
+        bb = total / args.hands * 100.0
+        win_rate = sum(1 for w in per_hand_bb if w > 0) / args.hands
+        var = float(np.var(per_hand_bb)) if args.hands > 1 else 0.0
+        print(f"game vs lineup [{', '.join(names[1:])}]  ({args.hands} hands)")
+        print(f"  you: {total:+.1f} bb total, {bb:+.2f} bb/100, "
+              f"won {win_rate * 100:.1f}% of hands, var {var:.1f}")
+        stats = bot_own_stats(results, seat=0)
+        print(f"  your play: VPIP {stats['vpip'] * 100:.1f}%  PFR {stats['pfr'] * 100:.1f}%  "
+              f"postflop aggression {stats['aggression_freq']:.2f}  "
+              f"fold-to-cbet {stats['fold_to_cbet'] * 100:.0f}%  "
+              f"postflop fold {stats['fold_rate_postflop'] * 100:.0f}%")
+        if args.replay is not None:
+            if 0 <= args.replay < len(results):
+                print()
+                print(format_hand(results[args.replay], names,
+                                  hand_label=f"Hand #{args.replay} of {args.hands}"))
+            else:
+                print(f"error: --replay {args.replay} out of range (0..{len(results) - 1})")
+                return 2
+        return 0
+
     reports = run_benchmark(PokerBot(random.Random(args.seed), mc_iters=args.mc_iters),
                             args.hands, args.seed,
                             num_seats=args.seats, buy_in=args.buy_in, mc_iters=args.mc_iters)
