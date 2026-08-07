@@ -32,29 +32,61 @@ def _load_external(name):
     return cls
 
 
-def run_heads_up(our_player, opponent, max_round, initial_stack=200, sb=1):
-    config = setup_config(max_round=max_round, initial_stack=initial_stack,
-                          small_blind_amount=sb)
-    config.register_player(name="pokr", algorithm=our_player)
-    config.register_player(name=opponent.__class__.__name__, algorithm=opponent)
+def _session_result(config, target_rounds, initial_stack, bb):
+    """Run one PyPokerEngine session, return (bb_by_name, hands_played).
+    The engine stops early if a player busts."""
     result = start_poker(config, verbose=0)
-    stacks = {p["name"]: p["stack"] for p in result["players"]}
+    bb_by_name = {p["name"]: (p["stack"] - initial_stack) / bb for p in result["players"]}
+    # rounds actually played is not exposed; approximate by max_round unless
+    # someone busted (then the game ended early). We can't know exactly, so
+    # we just count the configured rounds as played and rely on many small
+    # sessions to amortize the truncation error.
+    return bb_by_name, target_rounds
+
+
+def run_heads_up(our_player, opponent, max_round, initial_stack=200, sb=1):
+    """Heads-up with rebuy: PyPokerEngine ends the game at the first bust, so
+    run many small sessions and reset stacks between them."""
     bb = sb * 2
-    pokr_bb = (stacks["pokr"] - initial_stack) / bb
-    opp_bb = (stacks[opponent.__class__.__name__] - initial_stack) / bb
-    return pokr_bb, opp_bb, stacks
+    total_pokr = 0.0
+    total_opp = 0.0
+    remaining = max_round
+    session = 200
+    while remaining > 0:
+        rounds = min(remaining, session)
+        config = setup_config(max_round=rounds, initial_stack=initial_stack,
+                              small_blind_amount=sb)
+        config.register_player(name="pokr", algorithm=our_player)
+        config.register_player(name=opponent.__class__.__name__, algorithm=opponent)
+        result = start_poker(config, verbose=0)
+        stacks = {p["name"]: p["stack"] for p in result["players"]}
+        pokr_bb = (stacks["pokr"] - initial_stack) / bb
+        opp_bb = (stacks[opponent.__class__.__name__] - initial_stack) / bb
+        total_pokr += pokr_bb
+        total_opp += opp_bb
+        remaining -= rounds
+    return total_pokr, total_opp, {"pokr": total_pokr, opponent.__class__.__name__: total_opp}
 
 
 def run_6max(our_player, opponents, max_round, initial_stack=200, sb=1):
-    config = setup_config(max_round=max_round, initial_stack=initial_stack,
-                          small_blind_amount=sb)
-    config.register_player(name="pokr", algorithm=our_player)
-    for i, opp in enumerate(opponents):
-        config.register_player(name=f"{opp.__class__.__name__}{i}", algorithm=opp)
-    result = start_poker(config, verbose=0)
-    stacks = {p["name"]: p["stack"] for p in result["players"]}
+    """6-max with rebuy: short sessions, stack reset between them."""
     bb = sb * 2
-    return {n: (s - initial_stack) / bb for n, s in stacks.items()}, stacks
+    totals = {n: 0.0 for n in ["pokr"] + [f"{o.__class__.__name__}{i}"
+                                          for i, o in enumerate(opponents)]}
+    remaining = max_round
+    session = 200
+    while remaining > 0:
+        rounds = min(remaining, session)
+        config = setup_config(max_round=rounds, initial_stack=initial_stack,
+                              small_blind_amount=sb)
+        config.register_player(name="pokr", algorithm=our_player)
+        for i, opp in enumerate(opponents):
+            config.register_player(name=f"{opp.__class__.__name__}{i}", algorithm=opp)
+        result = start_poker(config, verbose=0)
+        for p in result["players"]:
+            totals[p["name"]] += (p["stack"] - initial_stack) / bb
+        remaining -= rounds
+    return totals, {}
 
 
 def main(argv=None):
