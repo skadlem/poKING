@@ -240,27 +240,35 @@ class PokerGame:
         return [p for p in players if not p.folded and not p.all_in]
 
     def _award(self, state: GameState, players: list[PlayerView]) -> None:
+        from .cards import HandScore  # noqa: F401  (used for annotation)
+
         eligible = self._not_folded(players)
         if len(eligible) == 1:
             eligible[0].stack += state.pot
             return
-        # Single pot, no side pots in Task 6: all players contributed equally.
-        best: HandScore | None = None
-        winners: list[PlayerView] = []
-        for p in eligible:
-            score = evaluate_hand(p.hole + state.community)
-            if best is None or score > best:
-                best = score
-                winners = [p]
-            elif score == best:
-                winners.append(p)
-        share, rem = divmod(state.pot, len(winners))
-        for w in winners:
-            w.stack += share
-        # odd chip to first winner after the button
-        for k in range(rem):
-            idx = (k + 1 + state.dealer) % len(players)
+        levels = sorted({p.committed for p in players})
+        prev = 0
+        for level in levels:
+            slice_pot = (level - prev) * sum(1 for p in players if p.committed >= level)
+            prev = level
+            if slice_pot == 0:
+                continue
+            contenders = [p for p in eligible if p.committed >= level]
+            if not contenders:
+                continue
+            best: HandScore | None = None
+            winners: list[PlayerView] = []
+            for p in contenders:
+                score = evaluate_hand(p.hole + state.community)
+                if best is None or score > best:
+                    best = score
+                    winners = [p]
+                elif score == best:
+                    winners.append(p)
+            share, rem = divmod(slice_pot, len(winners))
             for w in winners:
-                if w.id == idx:
-                    w.stack += 1
-                    break
+                w.stack += share
+            # odd chips to winners in seat order starting after the button
+            order = sorted(winners, key=lambda w: (w.id - state.dealer - 1) % len(players))
+            for k in range(rem):
+                order[k % len(order)].stack += 1
