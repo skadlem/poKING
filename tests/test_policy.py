@@ -121,6 +121,23 @@ def test_actions_always_legal(monkeypatch):
         assert _is_legal(a, state)
 
 
+def test_tight_aggressive_folds_more_to_bets_than_loose(monkeypatch):
+    # Same marginal hand facing a large bet. A tight+aggressive opponent's betting
+    # range is far stronger than a random hand, so the bot must fold more often
+    # than against a loose opponent (whose bets are closer to random).
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.45)
+
+    def fold_count(summary):
+        p = Policy(random.Random(9))
+        s = make_state(hs("As Kh"), hs("2c 3c 4c"), pot=100, to_call=80, stack=400)
+        return sum(1 for _ in range(300)
+                   if p.decide(s, 0, summary, None).action_type == ActionType.FOLD)
+
+    tight = OpponentSummary(50, 0.10, 0.08, 0.60, 0.5, 0.5, {}, [6.0] * 50, {})
+    loose = OpponentSummary(50, 0.60, 0.30, 0.30, 0.5, 0.5, {}, [3.0] * 50, {})
+    assert fold_count(tight) > fold_count(loose) + 30
+
+
 
 def test_value_raise_not_degraded_by_cap(monkeypatch):
     # Facing a bet, with a cap above the incremental raise, the value raise must be

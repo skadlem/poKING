@@ -18,6 +18,16 @@ _MIRROR_BET_FRACTIONS = (0.66, 1.0, 1.5)
 _TEMPERATURE = 3.0
 _MIRROR_THRESHOLD = 0.6
 _BOT_THRESHOLD = 0.6
+# Range-aware equity discount: an opponent's betting range is stronger than a
+# random hand. Tight (low VPIP) + aggressive (high postflop aggression)
+# opponents bet a much stronger range, so facing their bets, equity is
+# discounted by up to _RANGE_DISCOUNT_MAX. Loose opponents' bets are close to
+# random; no discount.
+_RANGE_VPIP_FULL = 0.3       # vpip at or below this counts as fully tight
+_RANGE_AGGR_LO = 0.3         # aggression at or below this counts as not aggressive
+_RANGE_AGGR_SPAN = 0.5       # aggression span over _RANGE_AGGR_LO to reach full aggression
+_RANGE_DISCOUNT_MAX = 0.3
+_RANGE_FOLD_STRENGTH = 0.25  # at/above this range strength, a -EV call folds (no bluff-raise rescue)
 
 
 @dataclass
@@ -52,6 +62,27 @@ class Policy:
         stack = p.stack
         opp_count = max(sum(1 for q in state.players if q.id != player_id and not q.folded), 1)
         equity = monte_carlo_equity(p.hole, state.community, opp_count, self.mc_iters, self.rng)
+
+        # Range-aware equity: when facing a bet, the opponent's betting range is
+        # stronger than a random hand. Tight + aggressive opponents (low VPIP,
+        # high postflop aggression) bet a much stronger range, so discount equity
+        # against them; loose opponents' bets are close to random (no discount).
+        if to_call > 0 and summary is not None and summary.hands_observed >= 5 \
+                and state.street != "preflop":
+            tight = max(0.0, 1.0 - summary.vpip / _RANGE_VPIP_FULL)
+            aggressive = max(0.0, min(1.0, (summary.aggression_freq - _RANGE_AGGR_LO) / _RANGE_AGGR_SPAN))
+            strength = min(1.0, tight * aggressive)
+            equity *= 1.0 - _RANGE_DISCOUNT_MAX * strength
+            # Facing a strong betting range (tight + aggressive) with a -EV call,
+            # don't rescue the hand with a bluff-raise: fold. Raising a
+            # tight-aggressive bettor's strong range is -EV (the "win small, lose
+            # big" leak measured vs the TAG archetype). Postflop only: preflop
+            # raises carry less range information, and keeping preflop behavior
+            # unchanged preserves the self-play mirror signal.
+            if strength >= _RANGE_FOLD_STRENGTH:
+                call_ev = equity * pot - (1.0 - equity) * to_call
+                if call_ev <= 0:
+                    return Action.fold("fold vs strong range")
 
         fold_freq = summary.fold_rate_postflop if summary else 0.3
         mirror = detection is not None and detection.p_mirror >= _MIRROR_THRESHOLD
