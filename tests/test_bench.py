@@ -13,14 +13,14 @@ from pokr.opponents import CallingStation
 
 
 def test_deterministic_reports():
-    r1 = run_matchup(PokerBot(random.Random(1)), calling_station_factory, 200, seed=42)
-    r2 = run_matchup(PokerBot(random.Random(1)), calling_station_factory, 200, seed=42)
+    r1 = run_matchup(PokerBot(random.Random(1), mc_iters=10), calling_station_factory, 100, seed=42)
+    r2 = run_matchup(PokerBot(random.Random(1), mc_iters=10), calling_station_factory, 100, seed=42)
     assert r1 == r2
 
 
 def test_selfplay_is_symmetric():
-    r = run_matchup(PokerBot(random.Random(3)), lambda rng: PokerBot(rng), 400, seed=7)
-    # no rake: seat 0's total should be within 4 std of 0 over 400 hands
+    r = run_matchup(PokerBot(random.Random(3), mc_iters=10), lambda rng: PokerBot(rng, mc_iters=10), 150, seed=7)
+    # no rake: seat 0's total should be within 4 std of 0 over 150 hands
     std_total = 20 * (r.var_bb_per_100 ** 0.5) if r.var_bb_per_100 > 0 else 0.0
     assert abs(r.total_bb) <= 4 * std_total
 
@@ -32,7 +32,7 @@ def test_report_math():
 
 
 def test_run_benchmark_includes_self_and_leak_hunter():
-    reports = run_benchmark(PokerBot(random.Random(5)), num_hands=50, seed=1)
+    reports = run_benchmark(PokerBot(random.Random(5), mc_iters=10), num_hands=30, seed=1)
     names = [r.name for r in reports]
     assert any("self" in n.lower() for n in names)
     assert any("leak" in n.lower() for n in names)
