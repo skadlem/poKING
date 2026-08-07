@@ -31,6 +31,32 @@ Decisions recorded during brainstorming:
 | Language / stack | Python 3 with NumPy/Numba for vectorized hand evaluation and Monte Carlo. |
 | Mirror response | Exploit our own known leaks against the mirror. |
 
+### Competitive landscape findings (2026-08-07)
+
+Reviewed leading open-source poker systems: OpenSpiel (DeepMind), PokerRL (Deep
+CFR/NFSP), RLCard (no-limit Hold'em + CFR), rs-poker (Rust/CFR), a Pluribus
+reimplementation (6-max NLHE), and rosbo's classical bot (closest to our design).
+Four things from them could beat our current strategy, so the design incorporates
+all four as deltas:
+
+1. **Exploitability measurement.** Strong bots measure how beatable an opponent is
+   (PokerRL Best Response/LBR; OpenSpiel Nash-distance exploitability). Win rate vs.
+   canned archetypes can be gamed. Delta: an exploitability proxy in `bench.py`.
+2. **Deterministic play is death.** A pure EV-threshold policy is learnable and
+   exploitable by anyone modeling us (which is exactly what our own bot does). Every
+   serious bot randomizes. Delta: explicit mixed-strategy randomization in `policy.py`.
+3. **Unbalanced bluffing.** CFR opponents play balanced bluff-to-value frequencies;
+   EV-threshold bots bluff too little or with tellable frequency. Delta: explicit
+   bluff ranges in the decision layer.
+4. **Subgame solving** (Pluribus method) is state of the art for 6-max; static
+   policies lose on the river. Not v1, but `policy.py` is structured so a river solver
+   can slot in later.
+
+Also validated: RLCard/OpenSpiel ship pretrained CFR/NFSP agents. The `BotPlugin`
+connector can import those later, making "comparable to other bots" a measured
+number. None of these bots do opponent bot detection or mirror detection; that is
+our differentiator.
+
 ## 2. Architecture
 
 Approach B (approved): modular pipeline. One-way dependency layering; nothing below a
@@ -73,7 +99,8 @@ Key properties:
 - **`strategy.py`** — `Strategy` protocol: `decide(state, player_id) -> Action`. The only
   boundary bots cross.
 - **`opponents.py`** — canned archetypes implementing `Strategy`: calling station,
-  tight-aggressive, maniac, random.
+  tight-aggressive, maniac, random, plus a **leak hunter** opponent that models our
+  action frequencies and counter-adjusts (the exploitability proxy).
 - **`models.py`** — per-opponent stat tracker fed by `HandResult`: VPIP, PFR, aggression
   frequency, preflop raise-size distribution, fold-to-cbet. Emits a summary object per
   hand for detection.
@@ -85,14 +112,22 @@ Key properties:
   odds, capped by stack depth and a per-session bankroll budget; exposes the seam where
   cross-session bankroll management will plug in later.
 - **`policy.py`** — decision layer. Takes hand EV, opponent model, bot detection, and
-  risk-adjusted sizing, returns the chosen `Action` with an explanation record.
+  risk-adjusted sizing, returns the chosen `Action` with an explanation record. Two
+  competitive-landscape deltas: explicit mixed-strategy randomization over candidate
+  actions (never fully deterministic), and balanced bluff-to-value ranges (a bluff
+  frequency tied to the value-bet frequency of the same spot, so a river solver can
+  slot in later).
 - **`bot.py`** — `PokerBot` composes models + botdetect + risk + policy; implements
   `Strategy`; includes mirror-exploitation mode (attack our own known leaks when a mirror
   is detected).
 - **`bench.py`** — runs thousands of seeded games across seat rotations and opponent
-  lineups; reports BB/100, win rate, variance, and per-matchup results including self-play.
+  lineups; reports BB/100, win rate, variance, and per-matchup results including
+  self-play. Includes the exploitability proxy: every benchmark run also pits the bot
+  against the leak-hunter opponent and reports the resulting BB/100 as its
+  exploitability score.
 - **`connector.py`** — `BotPlugin` protocol so external bots can be dropped in later; no
-  real-platform adapter.
+  real-platform adapter. Documented future use: RLCard/OpenSpiel pretrained CFR/NFSP
+  agents as benchmark opponents.
 
 ## 4. Data flow
 
@@ -150,7 +185,8 @@ Key properties:
   chip conservation invariant after every hand, heads-up and full-ring rotations.
 - **`opponents`** — each canned archetype behaves as named: calling station never folds to
   a callable bet, maniac raises more than it calls, TAG raises a narrow range preflop,
-  random is uniform within legal actions.
+  random is uniform within legal actions, and the leak hunter reacts to our observed
+  frequencies (tightens against a tight player, loosens against a loose one).
 - **`models`** — stats update correctly from scripted `HandResult`s: VPIP/PFR/aggression
   denominators and numerators, bet-size distribution bins, reset behavior.
 - **`botdetect`** — known-bot classification: a scripted robot-like action stream scores
@@ -163,13 +199,17 @@ Key properties:
 - **`policy`** — decision tests: EV-positive vs EV-negative situations, opponent-model
   influence (exploits loose caller, respects tight player), bot detection influence
   (mirror triggers exploit-leak mode), risk cap respected, `Action.reason` populated.
+  Deltas: randomization is statistically present over repeated identical states (not
+  deterministic), and bluff frequency tracks value frequency (balanced ranges).
 - **`bench`** — determinism (same seed, same report), seat-rotation fairness (equal
-  positional distribution), reporting math (BB/100, win rate, variance), and a smoke test
-  running a small number of hands end to end.
+  positional distribution), reporting math (BB/100, win rate, variance), exploitability
+  score reported for the leak-hunter matchup, and a smoke test running a small number of
+  hands end to end.
 
 ## 7. Explicit non-goals (v1)
 
 - No real-money platform adapter.
 - No cross-session bankroll management (seam only).
 - No RL/CFR learning; classical explainable decision engine.
+- No subgame solving on the river; `policy.py` keeps a seam for it.
 - No multi-table play or table selection.
