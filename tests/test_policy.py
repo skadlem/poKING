@@ -162,6 +162,64 @@ def test_preflop_reraise_still_allowed_vs_wide_folder(monkeypatch):
     assert ActionType.RAISE in acts
 
 
+def _big_pot_state(hole, pot=200, to_call=80, stack=200):
+    """Deep-pot flop where the bluff risk cap (0.66xpot) sits below the legal
+    raise-to, so a desired raise gets capped into an illegal amount and the
+    fallback path runs."""
+    ps = [PlayerView(0, stack, hole=hole, street_committed=0),
+          PlayerView(1, stack, hole=hs("Ks Kd"), street_committed=80)]
+    legal = [LegalAction(ActionType.FOLD),
+             LegalAction(ActionType.CALL, to_call, to_call),
+             LegalAction(ActionType.RAISE, to_call + 4, stack)]
+    return GameState(ps, hs("2c 3c 4c"), pot=pot, current_bet=to_call,
+                     min_raise=4, street="flop", dealer=0, current_player=0,
+                     legal_actions=legal)
+
+
+def test_capped_bluff_raise_falls_back_to_fold_not_call(monkeypatch):
+    # A fold-equity-driven raise (bluff, garbage equity) that the risk cap clips
+    # below the legal raise-to must not degrade into a -EV call with garbage:
+    # the cap fallback must fold, never call.
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.2)
+    p = Policy(random.Random(3))
+    s = _big_pot_state(hs("7h 2d"))
+    seen_fallback_fold = False
+    for _ in range(300):
+        a = p.decide(s, 0, None, None)
+        assert a.reason != "risk cap fallback call"
+        if a.reason == "risk cap fallback fold":
+            seen_fallback_fold = True
+    assert seen_fallback_fold
+
+
+def test_capped_semibluff_raise_still_calls_when_call_is_ev_positive(monkeypatch):
+    # A semi-bluff with enough equity that the call itself is +EV keeps the
+    # call fallback when the raise is capped below legality.
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.5)
+    p = Policy(random.Random(3))
+    s = _big_pot_state(hs("7h 6h"))
+    seen_call = False
+    for _ in range(200):
+        a = p.decide(s, 0, None, None)
+        if a.action_type == ActionType.CALL:
+            seen_call = True
+    assert seen_call
+
+
+def test_capped_value_raise_falls_back_to_call(monkeypatch):
+    # A value raise capped below legality keeps the call fallback (call is +EV
+    # with 0.9 equity).
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.9)
+    p = Policy(random.Random(3))
+    s = _big_pot_state(hs("As Ah"))
+    seen_call = False
+    for _ in range(200):
+        a = p.decide(s, 0, None, None)
+        if a.action_type == ActionType.CALL:
+            seen_call = True
+    assert seen_call
+
+
 def test_risk_cap_respected(monkeypatch):
     cfg = RiskConfig(max_bet_fraction_of_stack=0.2)
     p = Policy(random.Random(2), cfg)

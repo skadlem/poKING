@@ -164,10 +164,20 @@ class Policy:
                     action = Action.raise_to(capped_to, action.reason) if action.action_type == ActionType.RAISE \
                         else Action.bet(capped_to, action.reason)
                 else:
-                    # capping makes the action illegal; fall back to check/call
+                    # Capping makes the action illegal. A fold-equity-driven
+                    # raise (bluff) that can't be legally sized must not
+                    # degrade into a call with garbage: call only when the call
+                    # itself is +EV (semi-bluff with equity), else fold. This
+                    # also starves the preflop re-raise escalation (mirror
+                    # self-play coin flips) of capped-bluff calls that grow
+                    # pots until bigger re-raises become legal.
                     call_la = [x for x in state.legal_actions if x.action_type == ActionType.CALL]
                     if call_la:
-                        action = Action.call(call_la[0].min_amount, "risk cap fallback call")
+                        call_ev = equity * pot - (1.0 - equity) * to_call
+                        if equity >= _VALUE_EQUITY or call_ev > 0:
+                            action = Action.call(call_la[0].min_amount, "risk cap fallback call")
+                        else:
+                            action = Action.fold("risk cap fallback fold")
                     else:
                         action = Action.check("risk cap fallback check")
         return action
