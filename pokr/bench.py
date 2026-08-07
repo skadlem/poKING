@@ -124,8 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--seats", type=int, default=6)
     ap.add_argument("--buy-in", type=int, default=200)
+    ap.add_argument("--mc-iters", type=int, default=150,
+                    help="Monte Carlo equity iterations per decision (default 150; "
+                         "lower for faster runs, e.g. 10-30)")
     args = ap.parse_args(argv)
-    reports = run_benchmark(PokerBot(random.Random(args.seed)), args.hands, args.seed,
+    reports = run_benchmark(PokerBot(random.Random(args.seed), mc_iters=args.mc_iters),
+                            args.hands, args.seed,
                             num_seats=args.seats, buy_in=args.buy_in)
     print(f"{'matchup':<16}{'hands':>6}{'total_bb':>10}{'bb/100':>10}{'win%':>8}{'var':>10}")
     for r in reports:
