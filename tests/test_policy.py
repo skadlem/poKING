@@ -101,6 +101,67 @@ def test_mirror_mode_increases_bet_size(monkeypatch):
     assert mean_bet(0.9) > mean_bet(0.1)
 
 
+def _preflop_state(hole, to_call=4, pot=9, street_committed=2, stack=200):
+    """BB facing a 3BB (6-chip) open: pot 9, call 4, min raise-to 8."""
+    ps = [PlayerView(0, stack, hole=hole, street_committed=street_committed),
+          PlayerView(1, stack, hole=hs("Ks Kd"), street_committed=6)]
+    legal = [LegalAction(ActionType.FOLD),
+             LegalAction(ActionType.CALL, to_call, to_call),
+             LegalAction(ActionType.RAISE, 8, stack)]
+    return GameState(ps, [], pot, current_bet=6, min_raise=2, street="preflop",
+                     dealer=0, current_player=0, legal_actions=legal)
+
+
+def _preflop_3bet_state(hole, to_call=18, pot=45, street_committed=12, stack=200):
+    """Hero raised to 12, faces a 3-bet to 30: pot 45, call 18, min raise-to 34.
+    Pot is big enough that the risk cap does not clip the raise, so the test
+    exercises the policy (not the cap)."""
+    ps = [PlayerView(0, stack, hole=hole, street_committed=street_committed),
+          PlayerView(1, stack, hole=hs("Ks Kd"), street_committed=30)]
+    legal = [LegalAction(ActionType.FOLD),
+             LegalAction(ActionType.CALL, to_call, to_call),
+             LegalAction(ActionType.RAISE, 34, stack)]
+    return GameState(ps, [], pot, current_bet=30, min_raise=4, street="preflop",
+                     dealer=0, current_player=0, legal_actions=legal)
+
+
+def test_no_bluff_reraises_into_tight_opener(monkeypatch):
+    # A tight opener (pfr == vpip: every voluntarily played hand is a raise)
+    # almost never folds to a reraise. The bot must not 4-bet-bluff into a
+    # tight 3-bet with garbage; fold or call only. Regression for the TAG leak
+    # (raising into a ~5% premium open range).
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.25)
+    p = Policy(random.Random(9))
+    s = _preflop_3bet_state(hs("7h 2d"))
+    tag = OpponentSummary(200, 0.06, 0.06, 0.5, 0.5, 0.7, {}, [6.0] * 200, {})
+    for _ in range(100):
+        a = p.decide(s, 0, tag, None)
+        assert a.action_type != ActionType.RAISE
+
+
+def test_preflop_call_discounted_vs_tight_raiser(monkeypatch):
+    # Facing a tight raiser's open with a marginal hand, the call must be
+    # discounted (their range is far stronger than a random hand) and folded.
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.33)
+    p = Policy(random.Random(9))
+    s = _preflop_state(hs("9h 8d"))
+    tag = OpponentSummary(200, 0.06, 0.06, 0.5, 0.5, 0.7, {}, [6.0] * 200, {})
+    for _ in range(100):
+        a = p.decide(s, 0, tag, None)
+        assert a.action_type == ActionType.FOLD
+
+
+def test_preflop_reraise_still_allowed_vs_wide_folder(monkeypatch):
+    # A wide opener who folds a lot still gets 4-bet (the steal arm must
+    # survive the fold-equity scaling).
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.25)
+    p = Policy(random.Random(9))
+    s = _preflop_3bet_state(hs("7h 2d"))
+    rand = OpponentSummary(200, 0.5, 0.15, 0.3, 0.5, 0.3, {}, [3.0] * 200, {})
+    acts = {p.decide(s, 0, rand, None).action_type for _ in range(200)}
+    assert ActionType.RAISE in acts
+
+
 def test_risk_cap_respected(monkeypatch):
     cfg = RiskConfig(max_bet_fraction_of_stack=0.2)
     p = Policy(random.Random(2), cfg)

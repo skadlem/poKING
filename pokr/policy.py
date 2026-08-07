@@ -64,29 +64,38 @@ class Policy:
         opp_count = max(sum(1 for q in state.players if q.id != player_id and not q.folded), 1)
         equity = monte_carlo_equity(p.hole, state.community, opp_count, self.mc_iters, self.rng)
 
-        # Range-aware equity: when facing a bet, the opponent's betting range is
-        # stronger than a random hand. Tight + aggressive opponents (low VPIP,
-        # high postflop aggression) bet a much stronger range, so discount equity
-        # against them; loose opponents' bets are close to random (no discount).
+        # Range-aware equity: the opponent's betting/raising range is stronger
+        # than a random hand, so discount equity when facing a bet or raise.
+        # Postflop, tight (low VPIP) + aggressive (high postflop aggression)
+        # opponents bet a much stronger range. Preflop, an opener who raises a
+        # large share of their voluntarily played hands (high pfr/vpip) is
+        # representing the same strength. Loose opponents' bets are close to
+        # random; no discount. (Measured leak vs the TAG archetype: the bot
+        # called/raised into a ~5% premium open range as if it were random.)
         strong_range = False
-        if to_call > 0 and summary is not None and summary.hands_observed >= 5 \
-                and state.street != "preflop":
+        preflop_strength = 0.0
+        if to_call > 0 and summary is not None and summary.hands_observed >= 5:
             tight = max(0.0, 1.0 - summary.vpip / _RANGE_VPIP_FULL)
-            aggressive = max(0.0, min(1.0, (summary.aggression_freq - _RANGE_AGGR_LO) / _RANGE_AGGR_SPAN))
-            strength = min(1.0, tight * aggressive)
+            if state.street != "preflop":
+                aggressive = max(0.0, min(1.0, (summary.aggression_freq - _RANGE_AGGR_LO) / _RANGE_AGGR_SPAN))
+                strength = min(1.0, tight * aggressive)
+                # Also treat a tight opponent who rarely folds to c-bets as
+                # betting a strong range: they call down with made hands, so our
+                # marginal holdings are dominated. Combined with low VPIP, this
+                # is the tight-aggressive "win small, lose big" profile.
+                if summary.fold_to_cbet > 0 and summary.fold_to_cbet < _RANGE_CBET_FOLD_MAX:
+                    strength = max(strength, tight * 0.5)
+            else:
+                # Preflop, an opener who raises a large share of their
+                # voluntarily played hands (high pfr/vpip) represents strength.
+                pfr_ratio = summary.pfr / summary.vpip if summary.vpip > 0 else 0.0
+                aggressive = max(0.0, min(1.0, (pfr_ratio - _RANGE_AGGR_LO) / _RANGE_AGGR_SPAN))
+                preflop_strength = strength = min(1.0, tight * aggressive)
             equity *= 1.0 - _RANGE_DISCOUNT_MAX * strength
-            # Also treat a tight opponent who rarely folds to c-bets as betting a
-            # strong range: they call down with made hands, so our marginal
-            # holdings are dominated. Combined with low VPIP, this is the
-            # tight-aggressive "win small, lose big" profile.
-            if summary.fold_to_cbet > 0 and summary.fold_to_cbet < _RANGE_CBET_FOLD_MAX:
-                strength = max(strength, tight * 0.5)
             # Facing a strong betting range (tight + aggressive) with a -EV call,
             # don't rescue the hand with a bluff-raise: fold. Raising a
             # tight-aggressive bettor's strong range is -EV (the "win small, lose
-            # big" leak measured vs the TAG archetype). Postflop only: preflop
-            # raises carry less range information, and keeping preflop behavior
-            # unchanged preserves the self-play mirror signal.
+            # big" leak measured vs the TAG archetype).
             strong_range = strength >= _RANGE_FOLD_STRENGTH
             if strong_range:
                 call_ev = equity * pot - (1.0 - equity) * to_call
@@ -97,6 +106,16 @@ class Policy:
         mirror = detection is not None and detection.p_mirror >= _MIRROR_THRESHOLD
         if detection is not None and detection.p_is_bot >= _BOT_THRESHOLD:
             fold_freq = max(fold_freq, 0.5)  # predictable opponents fold more to bets
+        if to_call > 0 and state.street == "preflop" and summary is not None \
+                and preflop_strength > 0:
+            # Facing a preflop raise from a TIGHT opener (the only case where
+            # their raise range is meaningfully stronger than random), their
+            # fold-to-reraise is near zero: scale fold equity down so
+            # bluff-reraises into tight opens die (the TAG leak). Loose openers
+            # keep their fold equity, so steals survive and mirror-like
+            # opponents (whose tightness is ~0) are unaffected - keeping the
+            # action-profile mirror signal intact.
+            fold_freq *= (1.0 - preflop_strength) ** 2
 
         cands: list[_Candidate] = []
         for la in state.legal_actions:
