@@ -49,8 +49,8 @@ def test_mirror_mode_triggered_by_detection(monkeypatch):
 
 
 def test_two_identical_bots_drift_to_mirror():
-    b0 = PokerBot(random.Random(1))
-    b1 = PokerBot(random.Random(1))
+    b0 = PokerBot(random.Random(1), mc_iters=30)
+    b1 = PokerBot(random.Random(1), mc_iters=30)
     lineup = [b0] + [b1] + [CallingStation() for _ in range(4)]
     for h in range(200):
         # rotate the dealer so both bots experience every position equally

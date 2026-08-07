@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import sys
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -91,6 +92,8 @@ class PokerGame:
         deck = self._deck or Deck(self.rng)
         for p in players:
             p.hole = deck.draw(2)
+            if p.stack <= 0:
+                p.folded = True  # can't play without chips; never dealt in
         state = GameState(
             players=players, community=[], pot=0, current_bet=0,
             min_raise=self.big_blind, street="preflop", dealer=self.initial_dealer,
@@ -171,7 +174,12 @@ class PokerGame:
                 break
             state.current_player = current
             state.legal_actions = self._legal_actions(state, current)
-            action = self.strategies[current].decide(state, current)
+            try:
+                action = self.strategies[current].decide(state, current)
+            except Exception as exc:  # sandbox: a crashing bot is folded, game continues
+                print(f"WARNING: strategy {current} raised {exc!r}; treated as fold", file=sys.stderr)
+                to_call = state.current_bet - p.street_committed
+                action = Action.fold(f"exception: {exc!r}") if to_call > 0 else Action.check("exception")
             self._validate_action(state, current, action)
             state.action_history.append((current, state.street, action))
             self._apply_action(state, current, action)

@@ -99,3 +99,18 @@ def test_conservation_stress_random_bots():
         assert sum(r.ending_stacks) == sum(r.starting_stacks)
         assert all(s >= 0 for s in r.ending_stacks)
         stacks = r.ending_stacks
+
+
+
+def test_zero_stack_player_folded_at_deal():
+    # dealer=0, HU: SB=0 has 0 chips (folded at deal), BB=1 posts 2, wins uncontested.
+    # Net: BB gets his own blind back (winnings [0, 0]); seat 0 never wins a pot it
+    # didn't contribute to, and chips are conserved.
+    g = make_game(
+        [Scripted([Action.check("x")]), Scripted([Action.check("x")])],
+        deck_cards=["As", "Ah", "Ks", "Kh"],
+        stacks=[0, 200], dealer=0,
+    )
+    r = g.play_hand()
+    assert r.winnings == [0, 0]
+    assert sum(r.ending_stacks) == sum(r.starting_stacks)

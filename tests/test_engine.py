@@ -155,3 +155,21 @@ def test_first_actor_responds_to_bet_after_wrap():
     seat1 = [a for (t, s, a) in r.actions if t == 1 and s == "flop"]
     assert [a.action_type for a in seat1] == [ActionType.CHECK, ActionType.FOLD]
     assert r.winnings == [0, -2, 2, 0, 0, 0]
+
+
+
+def test_crashing_bot_is_folded_and_game_continues():
+    class Crash(BaseStrategy):
+        def decide(self, state, pid):
+            raise RuntimeError("boom")
+
+    # dealer=2, n=3: SB=0 (Crash), BB=1, first=2 folds preflop. Crash (SB) must be
+    # sandboxed: facing the BB blind it folds; BB wins the blinds.
+    g = make_game(
+        [Crash(), Scripted([Action.check("x")]), Scripted([Action.fold("f")])],
+        stacks=[200, 200, 200], dealer=2,
+    )
+    r = g.play_hand()
+    assert sum(r.winnings) == 0
+    # BB nets the 3-chip pot (SB 1 + BB 2) minus his own 2-chip blind.
+    assert r.winnings[1] == 1

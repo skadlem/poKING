@@ -119,3 +119,48 @@ def test_actions_always_legal(monkeypatch):
         state = make_state(hs("7h 2d"), hs("2c 3c 4c"), pot=100, to_call=0)
         a = p.decide(state, 0, None, None)
         assert _is_legal(a, state)
+
+
+
+def test_value_raise_not_degraded_by_cap(monkeypatch):
+    # Facing a bet, with a cap above the incremental raise, the value raise must be
+    # preserved (not degraded to call by comparing raise-to against the cap).
+    from pokr.risk import RiskConfig
+    cfg = RiskConfig(kelly_fraction=1.0, max_bet_fraction_of_stack=1.0,
+                     max_bet_as_pot_fraction=10.0, session_budget=100000.0)
+    p = Policy(random.Random(6), cfg)
+    s = make_state(hs("As Ah"), hs("Ks Kd 2c"), pot=100, to_call=20, stack=200)
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.9)
+    seen_raise = False
+    for _ in range(300):
+        a = p.decide(s, 0, None, None)
+        if a.action_type == ActionType.RAISE:
+            seen_raise = True
+            assert a.amount > 20  # raise-to above the call amount
+    assert seen_raise
+
+
+def test_raise_cap_uses_incremental_amount(monkeypatch):
+    # Regression for the cap-unit bug: with street_committed=90, a raise-to of 104 is
+    # only 14 chips of incremental risk. The old code compared the raise-to (104)
+    # against the cap and degraded the value raise to a call.
+    from pokr.risk import RiskConfig
+    cfg = RiskConfig(kelly_fraction=1.0, max_bet_fraction_of_stack=0.2,
+                     max_bet_as_pot_fraction=10.0, session_budget=100000.0)
+    p = Policy(random.Random(6), cfg)
+    ps = [PlayerView(0, 200, hole=hs("As Ah"), street_committed=90),
+          PlayerView(1, 200, hole=hs("Ks Kd"))]
+    legal = [LegalAction(ActionType.FOLD),
+             LegalAction(ActionType.CALL, 10, 10),
+             LegalAction(ActionType.RAISE, 104, 200)]
+    s = GameState(ps, hs("Ks Kd 2c"), pot=200, current_bet=100, min_raise=4,
+                  street="flop", dealer=0, current_player=0, legal_actions=legal)
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.9)
+    seen_raise = False
+    for _ in range(200):
+        a = p.decide(s, 0, None, None)
+        if a.action_type == ActionType.RAISE:
+            seen_raise = True
+            assert a.amount >= 104  # legal raise-to, never a degraded call
+            assert a.amount <= 200
+    assert seen_raise

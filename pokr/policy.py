@@ -95,12 +95,15 @@ class Policy:
             else:
                 cap = min(int(self.risk_cfg.max_bet_fraction_of_stack * stack),
                           int(self.risk_cfg.max_bet_as_pot_fraction * pot))
-            if action.amount > cap:
+            # cap is a chip SIZE (incremental risk); for RAISE the amount is the
+            # raise-to, so compare/cap the incremental part.
+            incremental = action.amount - p.street_committed
+            if incremental > cap:
+                capped_to = p.street_committed + int(cap)
                 la = [x for x in state.legal_actions if x.action_type == action.action_type]
-                if la and la[0].min_amount <= cap <= la[0].max_amount:
-                    amt = int(cap)
-                    action = Action.raise_to(amt, action.reason) if action.action_type == ActionType.RAISE \
-                        else Action.bet(amt, action.reason)
+                if la and la[0].min_amount <= capped_to <= la[0].max_amount:
+                    action = Action.raise_to(capped_to, action.reason) if action.action_type == ActionType.RAISE \
+                        else Action.bet(capped_to, action.reason)
                 else:
                     # capping makes the action illegal; fall back to check/call
                     call_la = [x for x in state.legal_actions if x.action_type == ActionType.CALL]
