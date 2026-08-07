@@ -11,7 +11,6 @@ from .models import OpponentSummary
 from .risk import RiskConfig, risk_adjusted_bet_size
 from .strategy import Action, ActionType
 
-_MC_ITERS = 150
 _VALUE_EQUITY = 0.6
 _BLUFF_EQUITY_MAX = 0.35
 _BET_FRACTIONS = (0.33, 0.66, 1.0)
@@ -30,9 +29,15 @@ class _Candidate:
 class Policy:
     """Combines hand EV, opponent model, bot detection, and risk into one action."""
 
-    def __init__(self, rng: random.Random, risk_cfg: RiskConfig | None = None) -> None:
+    def __init__(
+        self,
+        rng: random.Random,
+        risk_cfg: RiskConfig | None = None,
+        mc_iters: int = 150,
+    ) -> None:
         self.rng = rng
         self.risk_cfg = risk_cfg or RiskConfig()
+        self.mc_iters = mc_iters
 
     def decide(
         self,
@@ -46,7 +51,7 @@ class Policy:
         pot = state.pot
         stack = p.stack
         opp_count = max(sum(1 for q in state.players if q.id != player_id and not q.folded), 1)
-        equity = monte_carlo_equity(p.hole, state.community, opp_count, _MC_ITERS, self.rng)
+        equity = monte_carlo_equity(p.hole, state.community, opp_count, self.mc_iters, self.rng)
 
         fold_freq = summary.fold_rate_postflop if summary else 0.3
         mirror = detection is not None and detection.p_mirror >= _MIRROR_THRESHOLD
