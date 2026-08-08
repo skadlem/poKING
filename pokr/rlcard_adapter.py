@@ -62,10 +62,6 @@ def _rl_card_string(card) -> str:
     return _RL_SUITS[card.suit] + _RL_RANKS[card.rank]
 
 
-def _card_index(card_str: str) -> int:
-    return _rl_refs()[1][card_str]
-
-
 def _rl_legal_actions(state: GameState, p: PlayerView):
     """Map our legal actions onto RLCard's action set, mirroring its gating."""
     RlAction, _ = _rl_refs()

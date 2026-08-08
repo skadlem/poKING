@@ -42,7 +42,9 @@ def risk_adjusted_bet_size(
     cfg: RiskConfig,
 ) -> int:
     """Bet size in chips: Kelly-sized off bankroll, capped by stack and pot."""
-    b = pot / max(pot, 1)
+    # Reward/risk is modeled as even money: Kelly scales the sizing off the
+    # bankroll; the policy chooses the pot-fraction size, capped below.
+    b = 1.0
     f = kelly_fraction(win_prob, b) * cfg.kelly_fraction
     by_bankroll = f * bankroll
     by_stack = cfg.max_bet_fraction_of_stack * stack

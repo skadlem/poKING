@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .strategy import ActionType
 
@@ -14,25 +13,7 @@ class OpponentSummary:
     aggression_freq: float
     fold_to_cbet: float
     fold_rate_postflop: float
-    raise_size_hist: dict[str, float]
     raise_sizes_exact: list[float]
-    action_hist: dict[str, int]
-
-
-_RAISE_BUCKETS = [
-    ("<2.5x", 0.0, 2.5),
-    ("2.5-3.5x", 2.5, 3.5),
-    ("3.5-4.5x", 3.5, 4.5),
-    ("4.5-6x", 4.5, 6.0),
-    (">6x", 6.0, float("inf")),
-]
-
-
-def _bucket(x: float) -> str:
-    for name, lo, hi in _RAISE_BUCKETS:
-        if lo <= x < hi:
-            return name
-    return ">6x"
 
 
 class OpponentModel:
@@ -49,7 +30,6 @@ class OpponentModel:
         self.cbet_faced = 0
         self.cbet_fold = 0
         self.raise_sizes: list[float] = []
-        self.action_hist: Counter[str] = Counter()
 
     def update(self, result, observer_id: int, target_id: int) -> None:
         if target_id == observer_id:
@@ -82,17 +62,10 @@ class OpponentModel:
                 self.cbet_faced += 1
                 if flop_actions[target_idx][2].action_type == ActionType.FOLD:
                     self.cbet_fold += 1
-        for (t, s, a) in result.actions:
-            if t == target_id:
-                self.action_hist[f"{s}:{a.action_type.value}"] += 1
 
     def summary(self) -> OpponentSummary:
         denom = max(self.hands, 1)
         agg_denom = max(self.postflop_aggr + self.postflop_calls, 1)
-        hist: Counter[str] = Counter()
-        for x in self.raise_sizes:
-            hist[_bucket(x)] += 1
-        n_raises = max(len(self.raise_sizes), 1)
         return OpponentSummary(
             hands_observed=self.hands,
             vpip=self.vpip_n / denom,
@@ -100,9 +73,7 @@ class OpponentModel:
             aggression_freq=self.postflop_aggr / agg_denom,
             fold_to_cbet=(self.cbet_fold / self.cbet_faced) if self.cbet_faced else 0.0,
             fold_rate_postflop=(self.postflop_folds / self.postflop_actions) if self.postflop_actions else 0.0,
-            raise_size_hist={k: v / n_raises for k, v in hist.items()},
             raise_sizes_exact=list(self.raise_sizes),
-            action_hist=dict(self.action_hist),
         )
 
 

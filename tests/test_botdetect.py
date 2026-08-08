@@ -7,8 +7,8 @@ from pokr.strategy import Action
 
 
 def summary(vpip=0.25, pfr=0.12, aggr=0.4, fold=0.4, round_frac=1.0, hands=50, sizes=None):
-    return OpponentSummary(hands, vpip, pfr, aggr, fold, 0.3, {},
-                           sizes if sizes is not None else [3.0] * hands, {})
+    return OpponentSummary(hands, vpip, pfr, aggr, fold, 0.3,
+                           sizes if sizes is not None else [3.0] * hands)
 
 
 def test_robot_like_scores_high():

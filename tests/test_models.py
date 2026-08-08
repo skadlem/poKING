@@ -69,21 +69,12 @@ def test_fold_rate_postflop():
     assert m.summary().fold_rate_postflop == 0.5
 
 
-def test_raise_size_hist():
+def test_raise_sizes_exact():
     m = OpponentModel()
     m.update(make_result([(1, "preflop", Action.raise_to(6, "r"))], bb=2), 0, 1)   # 3x
     m.update(make_result([(1, "preflop", Action.raise_to(10, "r"))], bb=2), 0, 1)  # 5x
     s = m.summary()
-    assert s.raise_size_hist["2.5-3.5x"] == 0.5
-    assert s.raise_size_hist["4.5-6x"] == 0.5
     assert s.raise_sizes_exact == [3.0, 5.0]
-
-
-def test_action_hist():
-    m = OpponentModel()
-    acts = [(1, "preflop", Action.raise_to(6, "r"))]
-    m.update(make_result(acts), observer_id=0, target_id=1)
-    assert m.summary().action_hist["preflop:raise"] == 1
 
 
 def test_manager_excludes_observer():

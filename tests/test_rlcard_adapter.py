@@ -10,12 +10,12 @@ from pokr.engine import GameState, LegalAction, PlayerView, PokerGame  # noqa: E
 from pokr.opponents import CallingStation, RandomBot  # noqa: E402
 from pokr.rlcard_adapter import (  # noqa: E402
     RlcardAdapter,
-    _card_index,
     _our_action,
     _raw_state,
     _rl_card_string,
     _rl_legal_actions,
     _STAGE_NAMES,
+    _rl_refs,
 )
 from pokr.strategy import ActionType  # noqa: E402
 from rlcard.games.nolimitholdem.round import Action as RlAction  # noqa: E402
@@ -50,8 +50,9 @@ def test_card_string_translation():
 
 
 def test_card_index_matches_rlcard_json():
-    assert _card_index("SA") == 0
-    assert _card_index("CK") == 51
+    card2index = _rl_refs()[1]
+    assert card2index["SA"] == 0
+    assert card2index["CK"] == 51
 
 
 def test_street_mapping():

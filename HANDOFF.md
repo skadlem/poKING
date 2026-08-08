@@ -1,8 +1,8 @@
-# Handoff — pokr Poker Bot (session 2026-08-06/07)
+# Handoff — pokr Poker Bot (session 2026-08-08)
 
 **Repo:** https://github.com/skadlem/poKING (public)
 **Branch:** everything merged to `main` (PR #1 merged + one cherry-pick)
-**Date:** 2026-08-07
+**Date:** 2026-08-08
 
 ---
 
@@ -43,7 +43,7 @@ Core features (all implemented and tested, 126 tests passing):
 - **Benchmarks** (`pokr/bench.py`): per-matchup reports (bb/100, win%, var),
   fresh bot per matchup (prevents cross-matchup model pollution), mixed-lineup
   game mode (`--lineup`, `--replay N`) with the bot's own play stats, CLI
-  `--mc-iters` flag.
+  `--mc-iters` flag, and `--fast` (opt-in numba equity path).
 - **External comparison** (`pokr/ppe.py`, `pokr/ppe_compare.py`): `PokrPlayer`
   adapter plays inside **PyPokerEngine** (independent third-party engine)
   against its official example bots (external/*.py: Honest/Fish/Random).
@@ -131,11 +131,22 @@ logic, not a cap change).
 - **Maniac is now measurable and negative** (−224 ± 28 at 2000 hands): the
   bot folds its blinds to maniac's 60% opens and pays off its value bets. New
   finding from the capped-bluff fix; needs a longer run + a defense strategy.
+- **Opponent targeting fixed** (session 2026-08-08): `bot.decide` used to read
+  `opponents[0]` always (lowest-seat live opponent), applying one seat's stats to
+  whoever acted. Now `PokerBot._target_opponent` picks the last bettor/raiser on the
+  current street, falling back to the last aggressor in the hand, then the first live
+  opponent. Mixed-lineup reference (seed 7, 1000 hands, mc_iters=10, pure path):
+  total -5703.5 bb -> -2800.0 bb (+4903 bb), VPIP 52.8% -> 14.7%.
 - The bot cannot steal blinds: the 0.66xpot risk cap sits below the legal
   preflop raise-to, making preflop raises impossible in small pots (PFR ~0.1%
   vs TAG). Attempted fix re-triggered mirror wars — see section 4.
 - `mirror_mode` is sticky (never reset once triggered) — by design for now.
-- numba fast path for equity is deferred (`ponytail:` comment in cards.py).
+- numba fast path for equity is done (`pokr/_fastcards.py`, opt-in via `bench --fast` /
+  `PokerBot(mc_fast=True)`): int-encoded cards + `@njit` evaluator, order-equivalent to
+  `cards.evaluate_hand` (0 mismatches in 200k cross-checked hands), ~10-120x faster per
+  decision. End-to-end: the 200-hand x 6-matchup benchmark at mc_iters=150 went
+  361.8s -> 2.3s. Pure path remains the default so tuned numbers stay comparable
+  (the fast path draws a different RNG stream).
 - RLCard pretrained agents need torch + a working `rlcard.agents` (broken on
   this Python 3.14 env: distutils removed, no setuptools). The adapter's
   policy callable is the plug point.
@@ -170,18 +181,21 @@ logic, not a cap change).
 2. **Preflop stealing done right**: recover the blind cost vs TAG (currently
    −20.5 ≈ blinds). Requires position-aware preflop logic (the cap-floor
    shortcut re-triggers mirror wars).
-3. Run a long (50k+ hand) benchmark to resolve maniac/random/self-play
-   (slow: ~1 hr+ at mc_iters=10).
+3. Run a long (50k+ hand) benchmark to resolve maniac/random/self-play.
+   Now affordable in minutes with `bench --fast`.
 4. RLCard pretrained agent: install torch + setuptools (for rlcard.agents) and
    plug an NFSP/DQN agent into `RlcardAdapter.policy`; or wire an OpenSpiel
    agent when Windows wheels exist.
 5. Wire `begin_session`/`should_stop` into a client or bench mode to exercise
    the BankrollManager end-to-end.
-6. Consider the numba fast path if simulation speed becomes a bottleneck.
+6. Consider making `--fast` the default once tuned numbers are re-anchored
+   (the fast path draws a different RNG stream than the pure path).
 
 ## 8. Git state
 
-- `main` at `97be9e5`, 5 commits ahead of the previous handoff:
+- `main` at `38b41f0`: `bc51def` (opt-in numba equity fast path + cleanups:
+  dead code removal, .gitignore, faster e2e smoke) and `38b41f0` (aggressor
+  targeting fix), on top of the previous handoff's:
   `33571fd` (preflop range fix, TAG −165 → −27), `7b24685` (capped-bluff fold,
   TAG −27 → −20.5, self-play var 64k), `066cf56` (BankrollManager),
   `97be9e5` (RLCard adapter), plus the docs update.

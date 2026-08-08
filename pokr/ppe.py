@@ -64,6 +64,10 @@ class PokrPlayer(BasePokerPlayer):
         self._round_num = round_count
         self._round_start = [s["stack"] for s in seats]
         self._round_actions = []
+        # Hole cards per seat: we only know our own; opponents are empty lists
+        # so HandResult.hole stays index-aligned with seats.
+        self._round_hole = [to_our_cards(hole_card) if s["uuid"] == self.uuid else []
+                            for s in seats]
 
     def receive_street_start_message(self, street, round_state):
         pass
