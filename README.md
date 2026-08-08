@@ -105,28 +105,32 @@ rules, and side-pot logic) against the framework's own example bots, via the
 
     python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7
 
-Heads-up, 2000 hands each, 10 MC iters, 200bb stacks (rebuy sessions since
-PyPokerEngine ends a game at the first bust):
+Heads-up, 1000 hands each, 10 MC iters, 200bb stacks, seed 7 (rebuy sessions
+since PyPokerEngine ends a game at the first bust), after the
+aggressor-targeting fix:
 
 | opponent | pokr bb/100 | read |
 |---|---|---|
-| HonestPlayer | **+1.9** | marginal win vs the equity-aware bot |
-| FishPlayer | **+27.5** | strong edge vs a never-folding fish |
-| RandomPlayer | **+29.9** | solid edge vs random play |
+| HonestPlayer | **+5.1** | win vs the equity-aware bot |
+| FishPlayer | **+40.5** | strong edge vs a never-folding fish |
+| RandomPlayer | **+49.9** | solid edge vs random play |
 
-6-max table (pokr + one of each), 2000 hands:
+6-max table (pokr + honest, fish, random, fish, random), 1000 hands, seed 7:
 
 | player | bb/100 |
 |---|---|
-| HonestPlayer | +47.6 |
-| **pokr** | **+37.6** |
-| FishPlayer | +38.9 / −24.3 |
-| RandomPlayer | −50.0 ×2 |
+| **pokr** | **+3.9** |
+| HonestPlayer | −45.8 |
+| FishPlayer (seat 1) | −50.0 |
+| RandomPlayer (seat 2) | +10.0 |
+| FishPlayer (seat 3) | +131.8 |
+| RandomPlayer (seat 4) | −50.0 |
 
-Takeaway: pokr is profitable against all three external bots, heads-up and at
-a full table. The edge is comfortable against the weak bots (fish, random) and
-thin against the equity-aware one (+1.9), which matches the internal finding
-that tight/equity-aware opponents are the bot's hardest matchup.
+Takeaway: pokr is profitable against all three external bots heads-up. The
+6-max table swings heavily with seat draw and the rebuy truncation (each
+200-round session resets stacks), so treat that table as directional. The old
+reference numbers (+1.9 / +27.5 / +29.9 heads-up at 2000 hands) predate the
+aggressor-targeting fix, which improved all three matchups.
 
 ## Module map
 
