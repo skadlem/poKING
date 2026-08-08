@@ -79,7 +79,7 @@ def test_bluff_frequency_rises_with_fold_freq(monkeypatch):
     def run(fold):
         p = Policy(random.Random(3))
         s = make_state(hs("7h 2d"), hs("2c 3c 4c"), pot=100, to_call=0)
-        ssum = OpponentSummary(50, 0.3, 0.1, 0.5, fold, fold, [3.0] * 50)
+        ssum = OpponentSummary(50, 0.3, 0.1, 0.5, fold, fold, 1.0)
         monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.2)
         return sum(1 for _ in range(300)
                    if p.decide(s, 0, ssum, None).action_type in (ActionType.BET, ActionType.RAISE))
@@ -133,7 +133,7 @@ def test_no_bluff_reraises_into_tight_opener(monkeypatch):
     monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.25)
     p = Policy(random.Random(9))
     s = _preflop_3bet_state(hs("7h 2d"))
-    tag = OpponentSummary(200, 0.06, 0.06, 0.5, 0.5, 0.7, [6.0] * 200)
+    tag = OpponentSummary(200, 0.06, 0.06, 0.5, 0.5, 0.7, 1.0)
     for _ in range(100):
         a = p.decide(s, 0, tag, None)
         assert a.action_type != ActionType.RAISE
@@ -145,7 +145,7 @@ def test_preflop_call_discounted_vs_tight_raiser(monkeypatch):
     monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.33)
     p = Policy(random.Random(9))
     s = _preflop_state(hs("9h 8d"))
-    tag = OpponentSummary(200, 0.06, 0.06, 0.5, 0.5, 0.7, [6.0] * 200)
+    tag = OpponentSummary(200, 0.06, 0.06, 0.5, 0.5, 0.7, 1.0)
     for _ in range(100):
         a = p.decide(s, 0, tag, None)
         assert a.action_type == ActionType.FOLD
@@ -157,7 +157,7 @@ def test_preflop_reraise_still_allowed_vs_wide_folder(monkeypatch):
     monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.25)
     p = Policy(random.Random(9))
     s = _preflop_3bet_state(hs("7h 2d"))
-    rand = OpponentSummary(200, 0.5, 0.15, 0.3, 0.5, 0.3, [3.0] * 200)
+    rand = OpponentSummary(200, 0.5, 0.15, 0.3, 0.5, 0.3, 1.0)
     acts = {p.decide(s, 0, rand, None).action_type for _ in range(200)}
     assert ActionType.RAISE in acts
 
@@ -252,8 +252,8 @@ def test_tight_aggressive_folds_more_to_bets_than_loose(monkeypatch):
         return sum(1 for _ in range(300)
                    if p.decide(s, 0, summary, None).action_type == ActionType.FOLD)
 
-    tight = OpponentSummary(50, 0.10, 0.08, 0.60, 0.5, 0.5, [6.0] * 50)
-    loose = OpponentSummary(50, 0.60, 0.30, 0.30, 0.5, 0.5, [3.0] * 50)
+    tight = OpponentSummary(50, 0.10, 0.08, 0.60, 0.5, 0.5, 1.0)
+    loose = OpponentSummary(50, 0.60, 0.30, 0.30, 0.5, 0.5, 1.0)
     assert fold_count(tight) > fold_count(loose) + 30
 
 

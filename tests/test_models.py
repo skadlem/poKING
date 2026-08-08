@@ -69,12 +69,14 @@ def test_fold_rate_postflop():
     assert m.summary().fold_rate_postflop == 0.5
 
 
-def test_raise_sizes_exact():
+def test_round_size_frac():
     m = OpponentModel()
-    m.update(make_result([(1, "preflop", Action.raise_to(6, "r"))], bb=2), 0, 1)   # 3x
-    m.update(make_result([(1, "preflop", Action.raise_to(10, "r"))], bb=2), 0, 1)  # 5x
+    m.update(make_result([(1, "preflop", Action.raise_to(6, "r"))], bb=2), 0, 1)   # 3x (round)
+    m.update(make_result([(1, "preflop", Action.raise_to(7, "r"))], bb=2), 0, 1)   # 3.5x (round)
+    m.update(make_result([(1, "preflop", Action.raise_to(9, "r"))], bb=2), 0, 1)   # 4.5x (not round)
     s = m.summary()
-    assert s.raise_sizes_exact == [3.0, 5.0]
+    assert abs(s.round_size_frac - 2 / 3) < 1e-9
+    assert OpponentModel().summary().round_size_frac == 0.0
 
 
 def test_manager_excludes_observer():

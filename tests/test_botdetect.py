@@ -2,13 +2,15 @@ import math
 
 from pokr.botdetect import BotDetector, _hellinger
 from pokr.engine import HandResult
-from pokr.models import OpponentSummary
+from pokr.models import OpponentSummary, _is_round
 from pokr.strategy import Action
 
 
 def summary(vpip=0.25, pfr=0.12, aggr=0.4, fold=0.4, round_frac=1.0, hands=50, sizes=None):
+    if sizes is not None:
+        round_frac = sum(1.0 for x in sizes if _is_round(x)) / len(sizes)
     return OpponentSummary(hands, vpip, pfr, aggr, fold, 0.3,
-                           sizes if sizes is not None else [3.0] * hands)
+                           round_frac)
 
 
 def test_robot_like_scores_high():

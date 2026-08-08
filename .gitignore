@@ -5,5 +5,5 @@ __pycache__/
 .venv/
 
 # benchmark run artifacts
-bench_fix*.txt
-ppe_results.txt
+bench_*.txt
+ppe_results*.txt

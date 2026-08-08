@@ -14,9 +14,6 @@ _BOT_SAMPLE_K = 25.0
 _MIRROR_SAMPLE_K = 15.0
 _MIRROR_SCALE = 0.15
 
-_ROUND_SIZES = (2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0)
-
-
 @dataclass
 class DetectionResult:
     p_is_bot: float
@@ -24,16 +21,9 @@ class DetectionResult:
     samples: int
 
 
-def _is_round(x: float) -> bool:
-    return any(abs(x - r) < 1e-6 for r in _ROUND_SIZES)
-
-
 def _features(s: OpponentSummary):
     pfr_ratio = (s.pfr / s.vpip) if s.vpip > 0 else 0.0
-    round_frac = 0.0
-    if s.raise_sizes_exact:
-        round_frac = sum(1.0 for x in s.raise_sizes_exact if _is_round(x)) / len(s.raise_sizes_exact)
-    return [s.vpip, pfr_ratio, s.aggression_freq, s.fold_to_cbet, round_frac]
+    return [s.vpip, pfr_ratio, s.aggression_freq, s.fold_to_cbet, s.round_size_frac]
 
 
 def _logistic(x) -> float:
