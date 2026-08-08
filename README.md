@@ -44,25 +44,29 @@ board, showdown, net result). Example:
 
 ## Benchmark results
 
-Reference run: seed 7, 2000 hands per matchup, `mc_iters=10`, 6-max, 200bb
-buy-in, no rake, fresh bot per matchup.
+Reference run: seed 7, 2000 hands per matchup, `mc_iters=10`, `--fast` (numba
+equity path), 6-max, 200bb buy-in, no rake, fresh bot per matchup, after the
+aggressor-targeting fix. SE = std error of bb/100 (sqrt(var/hands) x 100);
+rows whose |bb/100| is within ~2 SE of 0 are statistically unresolved.
 
-| matchup | bb/100 | win% | variance (bb²) | read |
-|---|---|---|---|---|
-| calling station | **+832** | 8.6% | 2.9k | strong edge vs a never-folding opponent |
-| tight-aggressive | **−165** | 47.2% | 180 | loses to tight value-betting (best-measured leak) |
-| maniac | +14,847 | 2.4% | 7.4M | unmeasurable at 2000 hands (huge variance) |
-| random | +6,050 | 12.2% | 1.2M | unmeasurable at 2000 hands |
-| self-play | −1,515 | 17.8% | 472k | 6 copies coin-flip stacks; seed-sensitive |
-| leak hunter | −1.4 | 46.2% | 19 | exploitability proxy: near break-even |
+| matchup | bb/100 | SE | win% | variance (bb²) | read |
+|---|---|---|---|---|---|
+| calling station | **+647** | 110 | 8.8% | 2.4k | strong edge vs a never-folding opponent |
+| tight-aggressive | **−15.4** | 7.9 | 22.1% | 12 | ≈ blind cost (SB/BB pay 25 bb/100); tight |
+| maniac | −190 | 1314 | 1.4% | 345k | unresolved at 2000 hands (SE ≈ 7x estimate) |
+| random | +5,795 | 1798 | 7.5% | 647k | positive but unresolved (fat tails) |
+| self-play | −380 | 181 | 15.6% | 6.5k | ≈ 2.1 SE below 0; variance cut ~10x by targeting fix |
+| leak hunter | **+15.0** | 5.1 | 34.8% | 5 | exploitability proxy: small positive edge |
 
 Caveats: with `mc_iters=10` equity estimates are coarse, and matchups whose
-variance exceeds ~10⁵ bb² need 50k+ hands to resolve. Only the calling-station,
-tight-aggressive, and leak-hunter rows are statistically meaningful at 2000
-hands. Fixes that measurably improved the TAG matchup: a range-aware fold rule
-for marginal calls into tight betting ranges (−266 → −165 bb/100) and a default
-bet cap of 0.66× pot (cut stack-shove variance ~6× without killing the mirror
-signal).
+variance exceeds ~10⁵ bb² need 50k+ hands to resolve (see HANDOFF.md for the
+long-run reference). Only the calling-station, tight-aggressive, self-play,
+and leak-hunter rows are statistically meaningful at 2000 hands. Fixes that
+measurably improved results: a range-aware fold rule for marginal calls into
+tight betting ranges (−266 → −165 bb/100 vs TAG), a default bet cap of
+0.66× pot (cut stack-shove variance ~6× without killing the mirror signal),
+and aggressor targeting (the bot now reads the model of whoever actually bet;
+mixed-lineup total −5703.5 → −2800.0 bb at seed 7/1000 hands).
 
 ## Comparison with other bots
 
