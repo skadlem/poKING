@@ -7,7 +7,7 @@ from .bankroll import BankrollManager
 from .models import ModelManager
 from .policy import Policy
 from .risk import RiskConfig
-from .strategy import Action, BaseStrategy
+from .strategy import Action, ActionType, BaseStrategy
 
 
 class PokerBot(BaseStrategy):
@@ -49,12 +49,33 @@ class PokerBot(BaseStrategy):
         opponents = [q.id for q in state.players if q.id != player_id and not q.folded]
         if not opponents:
             return Action.check("no opponents")
-        opp = opponents[0]
+        opp = self._target_opponent(state, player_id, opponents)
         summary = self.models.summary(opp)
         detection = self.detector.detect(opp, summary)
         if detection.p_mirror >= self.MIRROR_THRESHOLD:
             self.mirror_mode = True
         return self.policy.decide(state, player_id, summary, detection)
+
+    @staticmethod
+    def _target_opponent(state, player_id, opponents):
+        """Whose model/detection to read: the last bettor/raiser on the current
+        street (their range defines the bet we are facing), else the last
+        aggressor anywhere in the hand (a preflop raiser still defines the pot
+        when a later street is unopened), else the first live opponent.
+        Reading opponents[0] instead made the bot apply one seat's stats to
+        whoever happened to act, which mis-targets every multiway hand."""
+        opp_set = set(opponents)
+
+        def last_aggressor(street=None):
+            for pid, s, a in reversed(state.action_history):
+                if street is not None and s != street:
+                    continue
+                if pid != player_id and pid in opp_set and \
+                        a.action_type in (ActionType.BET, ActionType.RAISE):
+                    return pid
+            return None
+
+        return last_aggressor(state.street) or last_aggressor() or opponents[0]
 
     def on_hand_end(self, result, my_seat):
         self.models.observe(result, my_seat)
