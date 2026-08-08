@@ -87,6 +87,27 @@ python -m pokr.bench --lineup tag,tag,maniac,cs,random --hands 1000 --mc-iters 1
 python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7
 ```
 
+## 4b. Long-run reference (50k hands, seed 7, mc_iters=10, --fast, post-fixes)
+
+| matchup | bb/100 | SE | verdict |
+|---|---|---|---|
+| calling station | **+681** | 21.7 | strongly profitable (~31 SE) |
+| tight-aggressive | **-18.6** | 2.2 | resolved negative (~8 SE); approx blind cost (SB/BB pay 25 bb/100) |
+| maniac | **+17,323** | 9401 | directionally positive (~1.8 SE) but unresolved; huge showdown pots |
+| random | **+6,187** | 1068 | strongly profitable (~6 SE) |
+| self-play | **-426** | 149 | genuinely negative (~2.9 SE); mirror pots still leak |
+| leak hunter | **+15.5** | 1.3 | small positive edge vs the exploitability proxy (~12 SE) |
+
+The 50k run takes ~10 min with `--fast`. It was unrunnable before: bot-detection
+features rescanned the full raise-size history on every decision (O(hands) per
+decision, super-linear in run length) and a 50k run stalled past 75 min. Fixed by
+making the round-size stat incremental (commit 308ef38). Run:
+`python -m pokr.bench --hands 50000 --seed 7 --mc-iters 10 --fast`.
+
+Note the maniac verdict changed from the 2000-hand "-224" estimate (that was
+seed-lottery at SE ~1300); at 50k hands the direction flips positive, though the
+variance is still huge. Self-play is genuinely negative, not noise around 0.
+
 ## 4. Current measured results (seed 7, 2000 hands, mc_iters=10)
 
 Internal (own engine, fresh bot per matchup):
@@ -128,9 +149,10 @@ logic, not a cap change).
 - **Self-play variance (64k per-hand) is still ~20x a normal matchup** — the
   mirrors still build big showdown pots (avg ~360 bb), but the 680 bb
   all-in-flip regime is gone. EV is noise around 0.
-- **Maniac is now measurable and negative** (−224 ± 28 at 2000 hands): the
-  bot folds its blinds to maniac's 60% opens and pays off its value bets. New
-  finding from the capped-bluff fix; needs a longer run + a defense strategy.
+- **Maniac: the 2000-hand "−224" estimate was seed lottery.** The 50k-hand
+  long run (section 4b) resolves it to +17,323 ± 9,401 bb/100: positive but
+  unresolved. The blind-folding habit still shows in the replay, but the
+  matchup is not a net leak.
 - **Opponent targeting fixed** (session 2026-08-08): `bot.decide` used to read
   `opponents[0]` always (lowest-seat live opponent), applying one seat's stats to
   whoever acted. Now `PokerBot._target_opponent` picks the last bettor/raiser on the
@@ -176,8 +198,10 @@ logic, not a cap change).
 
 ## 7. Suggested next steps (in order)
 
-1. **Maniac defense** (newly visible, −224): the bot needs to defend its
-   blinds vs wide opens and call down maniac's bluff-heavy pot bets.
+1. **Self-play leak** (now measurable, −426 ± 149 at 50k hands; the maniac
+   matchup resolved positive, so this is the real open leak): the mirrors
+   still build big showdown pots. Needs the same leak-analysis pass
+   (`analyze_leak.py --matchup self`) that fixed TAG.
 2. **Preflop stealing done right**: recover the blind cost vs TAG (currently
    −20.5 ≈ blinds). Requires position-aware preflop logic (the cap-floor
    shortcut re-triggers mirror wars).
