@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import random
 from dataclasses import dataclass
 from typing import Callable, Sequence
@@ -30,6 +31,12 @@ class MatchupReport:
     bb_per_100: float
     win_rate: float
     var_bb_per_100: float
+
+    @property
+    def se_bb_per_100(self) -> float:
+        """Standard error of bb_per_100 over the per-hand sample. Matchups
+        whose |bb/100| is within ~2 SE of 0 are statistically unresolved."""
+        return math.sqrt(self.var_bb_per_100 / self.hands) * 100.0 if self.hands > 0 else 0.0
 
 
 def calling_station_factory(rng: random.Random) -> Strategy:
@@ -316,10 +323,11 @@ def main(argv: list[str] | None = None) -> int:
                             args.hands, args.seed,
                             num_seats=args.seats, buy_in=args.buy_in,
                             mc_iters=args.mc_iters, mc_fast=args.fast)
-    print(f"{'matchup':<16}{'hands':>6}{'total_bb':>10}{'bb/100':>10}{'win%':>8}{'var':>10}")
+    print(f"{'matchup':<16}{'hands':>6}{'total_bb':>10}{'bb/100':>10}{'SE':>8}"
+          f"{'win%':>8}{'var':>10}")
     for r in reports:
         print(f"{r.name:<16}{r.hands:>6}{r.total_bb:>10.2f}{r.bb_per_100:>10.2f}"
-              f"{r.win_rate * 100:>7.1f}%{r.var_bb_per_100:>10.2f}")
+              f"{r.se_bb_per_100:>8.1f}{r.win_rate * 100:>7.1f}%{r.var_bb_per_100:>10.2f}")
     return 0
 
 
