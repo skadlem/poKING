@@ -182,7 +182,7 @@ class PokerGame:
                 print(f"WARNING: strategy {current} raised {exc!r}; treated as fold", file=sys.stderr)
                 to_call = state.current_bet - p.street_committed
                 action = Action.fold(f"exception: {exc!r}") if to_call > 0 else Action.check("exception")
-            self._validate_action(state, current, action)
+            self._validate_action(state, current, action, state.legal_actions)
             state.action_history.append((current, state.street, action))
             self._apply_action(state, current, action)
             p.acted_round = True
@@ -210,9 +210,9 @@ class PokerGame:
                 out.append(LegalAction(ActionType.BET, min_bet, p.stack))
         return out
 
-    def _validate_action(self, state: GameState, pid: int, action: Action) -> None:
-        legal = [la for la in self._legal_actions(state, pid)
-                 if la.action_type == action.action_type]
+    def _validate_action(self, state: GameState, pid: int, action: Action,
+                         legal_actions: list[LegalAction]) -> None:
+        legal = [la for la in legal_actions if la.action_type == action.action_type]
         if not legal:
             raise IllegalAction(f"{action.action_type} not legal for player {pid}")
         la = legal[0]
