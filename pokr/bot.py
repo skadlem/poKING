@@ -27,11 +27,12 @@ class PokerBot(BaseStrategy):
         num_players: int = 6,
         mc_iters: int = 150,
         bankroll_manager: BankrollManager | None = None,
+        mc_fast: bool = False,
     ) -> None:
         self.rng = rng or random.Random()
         self.models = ModelManager(num_players)
         self.detector = BotDetector()
-        self.policy = Policy(self.rng, risk_cfg, mc_iters)
+        self.policy = Policy(self.rng, risk_cfg, mc_iters, mc_fast)
         self.num_players = num_players
         self.mirror_mode = False
         self.bankroll_manager = bankroll_manager

@@ -218,6 +218,7 @@ def run_benchmark(
     num_seats: int = 6,
     buy_in: int = 200,
     mc_iters: int | None = None,
+    mc_fast: bool = False,
 ) -> list[MatchupReport]:
     """Run the full benchmark. mc_iters, when given, is applied to self-play
     opponents and to fresh clones of the primary bot. A FRESH bot is used per
@@ -228,7 +229,8 @@ def run_benchmark(
     def fresh_bot():
         if isinstance(bot, PokerBot):
             return PokerBot(random.Random(seed), risk_cfg=bot.policy.risk_cfg,
-                            num_players=bot.num_players, mc_iters=bot.policy.mc_iters)
+                            num_players=bot.num_players, mc_iters=bot.policy.mc_iters,
+                            mc_fast=bot.policy.mc_fast)
         return bot
 
     factories = list(opponent_factories) if opponent_factories else list(_DEFAULT_FACTORIES)
@@ -239,7 +241,8 @@ def run_benchmark(
     ]
     if include_self:
         def self_factory(rng):
-            return PokerBot(rng, mc_iters=mc_iters) if mc_iters is not None else PokerBot(rng)
+            return (PokerBot(rng, mc_iters=mc_iters, mc_fast=mc_fast) if mc_iters is not None
+                    else PokerBot(rng, mc_fast=mc_fast))
         reports.append(run_matchup(fresh_bot(), self_factory, num_hands,
                                    seed + 5000, num_seats=num_seats, buy_in=buy_in,
                                    name="self_play"))
@@ -259,6 +262,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mc-iters", type=int, default=150,
                     help="Monte Carlo equity iterations per decision (default 150; "
                          "lower for faster runs, e.g. 10-30)")
+    ap.add_argument("--fast", action="store_true",
+                    help="use the numba equity fast path (~10-120x faster per "
+                         "decision; RNG stream differs from the pure path)")
     ap.add_argument("--lineup", type=str, default=None,
                     help="Play a real 6-max game vs a mixed lineup, e.g. "
                          "'cs,tag,tag,maniac,random' (one abbr per opponent seat: "
@@ -280,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         factories = [LINEUP_ABBREVS[a] for a in abbrs]
         names = ["You(pokr)"] + [LINEUP_NAMES[a] for a in abbrs]
-        bot = PokerBot(random.Random(args.seed), mc_iters=args.mc_iters)
+        bot = PokerBot(random.Random(args.seed), mc_iters=args.mc_iters, mc_fast=args.fast)
         per_hand_bb, results = play_session(bot, factories, args.hands, args.seed,
                                             num_seats=args.seats, buy_in=args.buy_in)
         total = sum(per_hand_bb)
@@ -305,9 +311,11 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         return 0
 
-    reports = run_benchmark(PokerBot(random.Random(args.seed), mc_iters=args.mc_iters),
+    reports = run_benchmark(PokerBot(random.Random(args.seed), mc_iters=args.mc_iters,
+                                     mc_fast=args.fast),
                             args.hands, args.seed,
-                            num_seats=args.seats, buy_in=args.buy_in, mc_iters=args.mc_iters)
+                            num_seats=args.seats, buy_in=args.buy_in,
+                            mc_iters=args.mc_iters, mc_fast=args.fast)
     print(f"{'matchup':<16}{'hands':>6}{'total_bb':>10}{'bb/100':>10}{'win%':>8}{'var':>10}")
     for r in reports:
         print(f"{r.name:<16}{r.hands:>6}{r.total_bb:>10.2f}{r.bb_per_100:>10.2f}"

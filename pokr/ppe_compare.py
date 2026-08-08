@@ -32,18 +32,6 @@ def _load_external(name):
     return cls
 
 
-def _session_result(config, target_rounds, initial_stack, bb):
-    """Run one PyPokerEngine session, return (bb_by_name, hands_played).
-    The engine stops early if a player busts."""
-    result = start_poker(config, verbose=0)
-    bb_by_name = {p["name"]: (p["stack"] - initial_stack) / bb for p in result["players"]}
-    # rounds actually played is not exposed; approximate by max_round unless
-    # someone busted (then the game ended early). We can't know exactly, so
-    # we just count the configured rounds as played and rely on many small
-    # sessions to amortize the truncation error.
-    return bb_by_name, target_rounds
-
-
 def run_heads_up(our_player, opponent, max_round, initial_stack=200, sb=1):
     """Heads-up with rebuy: PyPokerEngine ends the game at the first bust, so
     run many small sessions and reset stacks between them."""

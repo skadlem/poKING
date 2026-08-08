@@ -45,10 +45,21 @@ class Policy:
         rng: random.Random,
         risk_cfg: RiskConfig | None = None,
         mc_iters: int = 150,
+        mc_fast: bool = False,
     ) -> None:
         self.rng = rng
         self.risk_cfg = risk_cfg or RiskConfig()
         self.mc_iters = mc_iters
+        self.mc_fast = mc_fast
+        # Opt-in numba equity (~10-120x faster; different RNG draw stream, so
+        # results differ from the pure path seed-for-seed). Default stays pure
+        # python so tuned benchmark numbers remain comparable and numba stays
+        # lazily imported.
+        if mc_fast:
+            from ._fastcards import monte_carlo_equity_fast
+            self._equity = monte_carlo_equity_fast
+        else:
+            self._equity = monte_carlo_equity
 
     def decide(
         self,
@@ -62,7 +73,7 @@ class Policy:
         pot = state.pot
         stack = p.stack
         opp_count = max(sum(1 for q in state.players if q.id != player_id and not q.folded), 1)
-        equity = monte_carlo_equity(p.hole, state.community, opp_count, self.mc_iters, self.rng)
+        equity = self._equity(p.hole, state.community, opp_count, self.mc_iters, self.rng)
 
         # Range-aware equity: the opponent's betting/raising range is stronger
         # than a random hand, so discount equity when facing a bet or raise.

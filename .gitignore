@@ -1,3 +1,9 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+*.egg-info/
+.venv/
+
+# benchmark run artifacts
+bench_fix*.txt
+ppe_results.txt
