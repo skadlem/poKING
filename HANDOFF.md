@@ -13,7 +13,7 @@ numpy/numba/pytest) built through the full gated process: spec → plan →
 subagent-driven implementation (17 tasks, each TDD + reviewed) → whole-branch
 review → merged.
 
-Core features (all implemented and tested, 126 tests passing):
+Core features (all implemented and tested, 120 tests passing):
 
 - **Deterministic NLHE engine** (`pokr/engine.py`): betting rounds, side pots,
   all-ins, chip-conservation invariants, bot-exception sandboxing, dealer
@@ -26,10 +26,11 @@ Core features (all implemented and tested, 126 tests passing):
 - **Dynamic risk** (`pokr/risk.py`): Kelly-style sizing; `RiskConfig` defaults
   `max_bet_as_pot_fraction=0.66` (evidence-tuned sweet spot), bankroll-manager
   seam (Protocol, `@runtime_checkable`).
-- **Bankroll management** (`pokr/bankroll.py`): `SimpleBankrollManager`
-  implements the seam (session budget = clamp(fraction x bankroll); stop-loss /
-  stop-win in session budgets); `PokerBot.begin_session(bankroll)` feeds it
-  into the Kelly sizing.
+- **Bankroll seam** (`pokr/risk.py` `BankrollManager` Protocol +
+  `PokerBot.begin_session`): per-session Kelly budget hook. The spec scopes
+  cross-session management out ("seam only"); `SimpleBankrollManager`
+  (session budget + stop-loss/stop-win) was removed as unused in 2026-08-18 —
+  re-add it when a client wires the seam.
 - **Policy** (`pokr/policy.py`): Monte Carlo equity (150 iters default,
   configurable `mc_iters`), softmax randomization over EV candidates (never
   deterministic), balanced bluffing tied to opponent fold freq, mirror mode
@@ -49,11 +50,20 @@ Core features (all implemented and tested, 126 tests passing):
   against its official example bots (external/*.py: Honest/Fish/Random).
 - **Plugin connector** (`pokr/connector.py`): registry for external bots, with
   an **RLCard adapter** (`pokr/rlcard_adapter.py`): translates our GameState to
-  RLCard's no-limit-holdem state/action model and back (plugin "rlcard", works
-  in `bench --lineup`; bundled policy is uniform random; torch-based pretrained
-  agents can plug in later). RLCard is optional (lazy import, rlcard 1.2.0
-  installed here; its `rlcard.agents` module is broken on Python 3.14 - no
-  distutils/setuptools/torch).
+  RLCard's no-limit-holdem state/action model and back. Plugins: "rlcard"
+  (uniform random over RLCard's action set) and "rlcard-dqn" (`TrainedDQNPolicy`
+  — greedy policy from a trained DQN checkpoint, lazy torch load, path via
+  `RLCARD_DQN_CKPT`, default `models/rlcard_dqn/dqn_final.pt`). Works in
+  `bench --lineup`. RLCard is optional (lazy imports; rlcard 1.2.0, termcolor,
+  setuptools-for-distutils-shim, torch 2.13.0+cpu installed in the venv).
+  RLCard ships no pretrained NLH agent, so one is trained heads-up vs random
+  play with `train_rlcard_dqn.py` (DQN, ~500 steps/s CPU). Measured 2026-08-18
+  (heads-up, 2000 hands, seed 7, mc_iters=10): pokr **+1,545** bb/100 vs
+  RlcardRandom, **+911** vs the 2.1M-step DQN — the trained agent is ~40%
+  harder than random but still shallow (DQN-vs-random never defends blind
+  steals). Eval curve plateaus once epsilon hits its 0.1 floor (~500k steps):
+  more steps do not buy a stronger agent; NFSP/self-play would, at ~3-5x the
+  CPU cost.
 
 ## 2. Key files
 
@@ -64,8 +74,7 @@ Core features (all implemented and tested, 126 tests passing):
 | `pokr/bot.py` | PokerBot composition (models+detector+policy) |
 | `pokr/bench.py` | benchmarks + CLI (`python -m pokr.bench`) |
 | `pokr/ppe.py` / `ppe_compare.py` | PyPokerEngine adapter + comparison CLI |
-| `pokr/bankroll.py` | SimpleBankrollManager (session budget + stop rules) |
-| `pokr/rlcard_adapter.py` | RLCard translation adapter (plugin "rlcard") |
+| `pokr/rlcard_adapter.py` | RLCard translation adapter (plugins "rlcard", "rlcard-dqn") |
 | `analyze_leak.py` | scratch diagnostic: per-position/street P&L, facing-bet stats |
 | `pokr/connector.py` | external-bot plugin registry |
 | `docs/superpowers/specs/2026-08-06-poker-bot-design.md` | approved spec |
@@ -85,6 +94,12 @@ python -m pokr.bench --lineup tag,tag,maniac,cs,random --hands 1000 --mc-iters 1
 
 # External comparison vs PyPokerEngine bots (heads-up + 6-max)
 python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7
+
+# RLCard benchmark: train a DQN (optional; checkpoint ships in models/, gitignored)
+python train_rlcard_dqn.py --steps 5000000 --seed 7
+# pokr vs RLCard random / trained DQN (heads-up)
+python -m pokr.bench --lineup rlcard --seats 2 --hands 2000 --mc-iters 10 --seed 7
+python -m pokr.bench --lineup rlcard-dqn --seats 2 --hands 2000 --mc-iters 10 --seed 7
 ```
 
 ## 4b. Long-run reference (50k hands, seed 7, mc_iters=10, --fast, post-fixes)
@@ -169,9 +184,11 @@ logic, not a cap change).
   decision. End-to-end: the 200-hand x 6-matchup benchmark at mc_iters=150 went
   361.8s -> 2.3s. Pure path remains the default so tuned numbers stay comparable
   (the fast path draws a different RNG stream).
-- RLCard pretrained agents need torch + a working `rlcard.agents` (broken on
-  this Python 3.14 env: distutils removed, no setuptools). The adapter's
-  policy callable is the plug point.
+- RLCard: DONE (2026-08-18) — rlcard 1.2.0 + torch 2.13.0+cpu work on Python
+  3.14 (needed: termcolor + setuptools for the distutils shim that
+  `rlcard.agents` requires). Plugins "rlcard" and "rlcard-dqn" benchmarked;
+  `train_rlcard_dqn.py` trains the DQN. Remaining: NFSP/self-play if a
+  stronger opponent is ever wanted.
 - OpenSpiel: not installed (no Windows wheels); RLCard adapter covers the
   connector story for now.
 - PyPokerEngine comparison uses rebuy sessions (engine ends at first bust);
@@ -207,11 +224,10 @@ logic, not a cap change).
    shortcut re-triggers mirror wars).
 3. Run a long (50k+ hand) benchmark to resolve maniac/random/self-play.
    Now affordable in minutes with `bench --fast`.
-4. RLCard pretrained agent: install torch + setuptools (for rlcard.agents) and
-   plug an NFSP/DQN agent into `RlcardAdapter.policy`; or wire an OpenSpiel
-   agent when Windows wheels exist.
-5. Wire `begin_session`/`should_stop` into a client or bench mode to exercise
-   the BankrollManager end-to-end.
+4. RLCard: done (DQN trained + benchmarked; plugins "rlcard"/"rlcard-dqn").
+   Optional follow-up: NFSP/self-play for a stronger opponent.
+5. Re-add a bankroll manager (seam stays; SimpleBankrollManager dropped as
+   unused 2026-08-18) when a client wires `begin_session` end-to-end.
 6. Consider making `--fast` the default once tuned numbers are re-anchored
    (the fast path draws a different RNG stream than the pure path).
 
