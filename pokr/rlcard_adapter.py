@@ -184,8 +184,45 @@ class RlcardAdapter(BaseStrategy):
         return _our_action(state, player_id, rl_action)
 
 
+class TrainedDQNPolicy:
+    """Greedy policy from a trained RLCard DQN checkpoint (no-limit hold'em).
+
+    Loads lazily (and only when actually deciding) so pokr imports and
+    benchmarks keep working without torch or a trained model present. Train
+    one with train_rlcard_dqn.py; point the factory at it via the
+    RLCARD_DQN_CKPT env var (default: models/rlcard_dqn/dqn_final.pt).
+    """
+
+    def __init__(self, ckpt_path: str | None = None,
+                 rng: random.Random | None = None) -> None:
+        self.ckpt_path = ckpt_path or os.environ.get(
+            "RLCARD_DQN_CKPT", "models/rlcard_dqn/dqn_final.pt")
+        self._agent = None
+
+    def _load(self):
+        if self._agent is None:
+            import contextlib
+            import io
+            import torch
+            from rlcard.agents.dqn_agent import DQNAgent
+            ckpt = torch.load(self.ckpt_path, map_location="cpu",
+                              weights_only=False)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self._agent = DQNAgent.from_checkpoint(checkpoint=ckpt)
+        return self._agent
+
+    def __call__(self, state: dict) -> int:
+        action, _ = self._load().eval_step(state)
+        return int(action)
+
+
 def rlcard_factory() -> RlcardAdapter:
     return RlcardAdapter()
 
 
+def rlcard_dqn_factory() -> RlcardAdapter:
+    return RlcardAdapter(TrainedDQNPolicy())
+
+
 register_plugin("rlcard", rlcard_factory)
+register_plugin("rlcard-dqn", rlcard_dqn_factory)

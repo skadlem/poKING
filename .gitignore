@@ -7,3 +7,6 @@ __pycache__/
 # benchmark run artifacts
 bench_*.txt
 ppe_results*.txt
+
+# rlcard training artifacts
+models/

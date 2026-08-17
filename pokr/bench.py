@@ -199,11 +199,12 @@ LINEUP_ABBREVS = {
     "leak": leak_hunter_factory,
     "self": lambda rng: PokerBot(rng),
     "rlcard": lambda rng: build_strategy("rlcard"),
+    "rlcard-dqn": lambda rng: build_strategy("rlcard-dqn"),
 }
 LINEUP_NAMES = {
     "cs": "CallingStation", "tag": "TightAggressive", "maniac": "Maniac",
     "random": "RandomBot", "leak": "LeakHunter", "self": "PokerBot",
-    "rlcard": "RlcardRandom",
+    "rlcard": "RlcardRandom", "rlcard-dqn": "RlcardDQN",
 }
 
 

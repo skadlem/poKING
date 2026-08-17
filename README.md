@@ -82,8 +82,8 @@ The bot is benchmarked against three reference classes:
    bot's frequencies and counter-adjusts. Near break-even (−1.4 bb/100) means
    the bot is not trivially exploitable by a simple adaptive counter.
 
-External bots (e.g. RLCard/OpenSpiel pretrained CFR/NFSP agents) can be dropped
-in through the plugin connector and benchmarked head-to-head:
+External bots (e.g. RLCard/OpenSpiel agents, trained or pretrained) can be
+dropped in through the plugin connector and benchmarked head-to-head:
 
 ```python
 from pokr.connector import register_plugin
@@ -131,6 +131,42 @@ Takeaway: pokr is profitable against all three external bots heads-up. The
 200-round session resets stacks), so treat that table as directional. The old
 reference numbers (+1.9 / +27.5 / +29.9 heads-up at 2000 hands) predate the
 aggressor-targeting fix, which improved all three matchups.
+
+### Measured: pokr vs RLCard (random + self-trained DQN)
+
+`pokr` also plays against **RLCard** agents (a third RL card-game framework,
+CSIRO Data61) through the plugin connector: `pokr/rlcard_adapter.py`
+translates our engine states into RLCard's no-limit-holdem state/action model
+and back, so any RLCard-style policy can sit in a pokr lineup. Two policies
+are registered:
+
+- `rlcard` — RLCard's action set played uniformly at random (the translation
+  layer's smoke test).
+- `rlcard-dqn` — a **self-trained DQN**: RLCard ships no pretrained NLH agent
+  (its model zoo only has Leduc-hold'em CFR), so one was trained heads-up vs
+  random play in RLCard's own engine. Train/reuse it with:
+
+      python train_rlcard_dqn.py --steps 5000000 --seed 7   # ~2h CPU, checkpoints every 100k steps
+      RLCARD_DQN_CKPT=models/rlcard_dqn/dqn_final.pt python -m pokr.bench --lineup rlcard-dqn --seats 2 --hands 2000 --mc-iters 10 --seed 7
+
+Heads-up, 2000 hands each, 10 MC iters, 200bb stacks, seed 7 (checkpoint at
+2.1M training steps, `models/rlcard_dqn/`, gitignored):
+
+| opponent | pokr bb/100 | SE | win% | variance (bb²) | read |
+|---|---|---|---|---|---|
+| RlcardRandom | **+1,545** | 518 | 42.5% | 54k | huge edge vs uniform-shove play |
+| RlcardDQN | **+911** | 413 | 27.1% | 34k | solid edge vs the trained agent |
+
+Takeaway: pokr wins decisively against both, but the trained DQN is
+meaningfully harder than RLCard's random policy — it cuts pokr's edge by
+~40% and drops pokr's hand win rate from 42.5% to 27.1%. It learned to fold
+junk and call/shove premiums (it beats random play by ~+8-10 chips/game in
+its own evals). Caveats: DQN-vs-random is a shallow agent — it never learns
+to defend blind steals, which is exactly what pokr exploits (81% VPIP) — so
+this is an honest "pokr vs a genuinely trained (if simple) third-party RL
+agent" row, not a test against a strong NLH solver. At 2 SE the DQN edge is
+statistically solid (+911 ± ~826); the random row is marginal by SE but
+decisive by win rate.
 
 ## Module map
 
