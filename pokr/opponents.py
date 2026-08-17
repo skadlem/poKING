@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 
 from .cards import evaluate_hand
+from .models import OpponentModel
 from .strategy import Action, ActionType, BaseStrategy
 
 
@@ -67,7 +68,7 @@ class TightAggressive(BaseStrategy):
         if state.street == "preflop":
             if _is_premium(p.hole):
                 target = max(3 * state.min_raise, state.current_bet + state.min_raise) \
-                    if to_call > 0 else 3 * self._big_blind_of(state)
+                    if to_call > 0 else 3 * state.min_raise
                 la = [x for x in state.legal_actions if x.action_type == ActionType.RAISE]
                 if la:
                     amt = min(max(target, la[0].min_amount), la[0].max_amount)
@@ -92,10 +93,6 @@ class TightAggressive(BaseStrategy):
                 amt = min(max(bet, la[0].min_amount), la[0].max_amount)
                 return Action.bet(amt, "tag value bet")
         return Action.check("tag checks")
-
-    def _big_blind_of(self, state) -> int:
-        # big blind is the largest blind posted this hand; approximate via min_raise baseline
-        return state.min_raise
 
 
 class Maniac(BaseStrategy):
@@ -122,9 +119,6 @@ class Maniac(BaseStrategy):
             amt = min(max(state.pot, bet_la[0].min_amount), bet_la[0].max_amount)
             return Action.bet(amt, "maniac bet")
         return Action.check("maniac check")
-
-
-from .models import OpponentModel
 
 
 class LeakHunter(BaseStrategy):

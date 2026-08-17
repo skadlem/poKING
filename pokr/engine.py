@@ -254,8 +254,6 @@ class PokerGame:
         return [p for p in players if not p.folded and not p.all_in]
 
     def _award(self, state: GameState, players: list[PlayerView]) -> None:
-        from .cards import HandScore  # noqa: F401  (used for annotation)
-
         eligible = self._not_folded(players)
         if len(eligible) == 1:
             eligible[0].stack += state.pot
