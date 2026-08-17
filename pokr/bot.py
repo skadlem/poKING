@@ -3,10 +3,9 @@ from __future__ import annotations
 import random
 
 from .botdetect import BotDetector, DetectionResult
-from .bankroll import BankrollManager
 from .models import ModelManager
 from .policy import Policy
-from .risk import RiskConfig
+from .risk import BankrollManager, RiskConfig
 from .strategy import Action, ActionType, BaseStrategy
 
 
