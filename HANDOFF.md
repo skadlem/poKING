@@ -13,7 +13,7 @@ numpy/numba/pytest) built through the full gated process: spec → plan →
 subagent-driven implementation (17 tasks, each TDD + reviewed) → whole-branch
 review → merged.
 
-Core features (all implemented and tested, 120 tests passing):
+Core features (all implemented and tested, 124 tests passing):
 
 - **Deterministic NLHE engine** (`pokr/engine.py`): betting rounds, side pots,
   all-ins, chip-conservation invariants, bot-exception sandboxing, dealer
@@ -102,22 +102,28 @@ python -m pokr.bench --lineup rlcard --seats 2 --hands 2000 --mc-iters 10 --seed
 python -m pokr.bench --lineup rlcard-dqn --seats 2 --hands 2000 --mc-iters 10 --seed 7
 ```
 
-## 4b. Long-run reference (50k hands, seed 7, mc_iters=10, --fast, post-fixes)
+## 4b. Long-run reference (50k hands, seed 7, mc_iters=10, --fast, post-fixes + OOP blind fold)
 
 | matchup | bb/100 | SE | verdict |
 |---|---|---|---|
-| calling station | **+681** | 21.7 | strongly profitable (~31 SE) |
-| tight-aggressive | **-18.6** | 2.2 | resolved negative (~8 SE); approx blind cost (SB/BB pay 25 bb/100) |
-| maniac | **+17,323** | 9401 | directionally positive (~1.8 SE) but unresolved; huge showdown pots |
-| random | **+6,187** | 1068 | strongly profitable (~6 SE) |
-| self-play | **-426** | 149 | genuinely negative (~2.9 SE); mirror pots still leak |
-| leak hunter | **+15.5** | 1.3 | small positive edge vs the exploitability proxy (~12 SE) |
+| calling station | **+636** | 21.3 | strongly profitable (~30 SE) |
+| tight-aggressive | **-10.2** | 1.3 | resolved negative (~8 SE); now below the blind cost (was -18.6) |
+| maniac | **+18,755** | 7899 | directionally positive (~2.4 SE) but unresolved; huge showdown pots |
+| random | **+6,185** | 1051 | strongly profitable (~6 SE) |
+| self-play | **-140** | 274 | unresolved (~0.5 SE); was -426±149 (2.9 SE) before the OOP blind fold — the blind leak is fixed structurally, but mirror-pots variance grew (375k vs 111k) |
+| leak hunter | **+11.5** | 1.5 | small positive edge vs the exploitability proxy (~8 SE) |
 
-The 50k run takes ~10 min with `--fast`. It was unrunnable before: bot-detection
-features rescanned the full raise-size history on every decision (O(hands) per
-decision, super-linear in run length) and a 50k run stalled past 75 min. Fixed by
-making the round-size stat incremental (commit 308ef38). Run:
+The 50k run takes ~10 min with `--fast`. Run:
 `python -m pokr.bench --hands 50000 --seed 7 --mc-iters 10 --fast`.
+(It was unrunnable before the incremental round-size stat, commit 308ef38:
+bot-detection rescanned full raise-size history per decision, O(hands) per
+decision — a 50k run stalled past 75 min.)
+
+Notes: the maniac row is seed-lottery at any sample size (SE ~8k). The OOP
+blind fold (marginal preflop calls from SB/BB, 6-max+ only) is what moved
+self-play from genuinely negative to unresolved; TAG improved -18.6 → -10.2.
+Heads-up is excluded from the rule (it regressed the PyPokerEngine
+HonestPlayer matchup).
 
 Note the maniac verdict changed from the 2000-hand "-224" estimate (that was
 seed-lottery at SE ~1300); at 50k hands the direction flips positive, though the
@@ -212,16 +218,26 @@ logic, not a cap change).
   initially weakened the P(mirror) signal (identical bots drift apart in a
   feedback loop); weighting the scaling by opener tightness (loose mirrors
   unaffected) preserved it.
+- (2026-08-18) OOP blind fold: marginal preflop calls from SB/BB now fold
+  (6-max+ only, equity < 0.42 — both the main call path and the risk-cap
+  fallback). Measured: preflop wide calls 531 → 270 and BB P&L −5988 → −625
+  bb at 2000 self-play hands (seed 7); TAG 50k −18.6 → −10.2; self-play 50k
+  −426 → −140 (unresolved). Heads-up excluded after a measured regression vs
+  PyPokerEngine's HonestPlayer.
 
 ## 7. Suggested next steps (in order)
 
-1. **Self-play leak** (now measurable, −426 ± 149 at 50k hands; the maniac
-   matchup resolved positive, so this is the real open leak): the mirrors
-   still build big showdown pots. Needs the same leak-analysis pass
-   (`analyze_leak.py --matchup self`) that fixed TAG.
+1. **Self-play variance** (the blind leak is fixed; self-play is now -140 ± 274
+   at 50k hands, unresolved instead of genuinely negative): the mirrors still
+   build big showdown pots (avg ~230 bb) and mirror mode still does not
+   reliably activate (P(mirror) ~0.20 vs the 0.6 threshold). Two paths:
+   (a) lower the mirror bet-sizing threshold so the documented river exploit
+   fires (risk: re-raise wars — see section 4), or (b) tighter postflop
+   call-downs with marginal pairs (showdown ratio ~1:4.5).
 2. **Preflop stealing done right**: recover the blind cost vs TAG (currently
-   −20.5 ≈ blinds). Requires position-aware preflop logic (the cap-floor
-   shortcut re-triggers mirror wars).
+   −10.2 at 50k, down from −18.6 after the OOP blind fold). Requires
+   position-aware preflop logic (the cap-floor shortcut re-triggers mirror
+   wars).
 3. Run a long (50k+ hand) benchmark to resolve maniac/random/self-play.
    Now affordable in minutes with `bench --fast`.
 4. RLCard: done (DQN trained + benchmarked; plugins "rlcard"/"rlcard-dqn").

@@ -300,3 +300,57 @@ def test_raise_cap_uses_incremental_amount(monkeypatch):
             assert a.amount >= 104  # legal raise-to, never a degraded call
             assert a.amount <= 200
     assert seen_raise
+
+
+def _blind_state(hole, seat, dealer, committed=2, to_call=4, pot=9, stack=200, n=6):
+    """6-max preflop: hero at `seat` (BB committed 2) faces a 3BB (6-chip) open:
+    pot 9, call 4, min raise-to 8. Other seats committed 6 (the opener)."""
+    ps = [PlayerView(i, stack, hole=(hole if i == seat else hs("Ks Kd")),
+                     street_committed=(committed if i == seat else 6))
+          for i in range(n)]
+    legal = [LegalAction(ActionType.FOLD),
+             LegalAction(ActionType.CALL, to_call, to_call),
+             LegalAction(ActionType.RAISE, 8, stack)]
+    return GameState(ps, [], pot, current_bet=6, min_raise=2, street="preflop",
+                     dealer=dealer, current_player=seat, legal_actions=legal)
+
+
+def test_oop_blind_folds_marginal_preflop_vs_raise(monkeypatch):
+    # BB (dealer 3 -> BB 5) facing an open with a marginal hand: raw pot odds
+    # justify the call, but OOP realization is poor, so the call must die
+    # (fold or raise, never call) — regression for the self-play blind leak.
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.35)
+    p = Policy(random.Random(9))
+    s = _blind_state(hs("9h 8d"), seat=5, dealer=3)
+    for _ in range(200):
+        assert p.decide(s, 5, None, None).action_type != ActionType.CALL
+
+
+def test_oop_blind_marginal_fold_survives_cap_fallback(monkeypatch):
+    # With a folder-heavy opponent the bluff raise wins the softmax, gets
+    # risk-capped below the legal raise-to, and must fall back to fold — not
+    # sneak back into a marginal OOP call.
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.35)
+    p = Policy(random.Random(9))
+    s = _blind_state(hs("9h 8d"), seat=5, dealer=3)
+    folder = OpponentSummary(200, 0.5, 0.2, 0.3, 0.3, 0.8, 1.0)
+    for _ in range(200):
+        assert p.decide(s, 5, folder, None).action_type != ActionType.CALL
+
+
+def test_oop_blind_calls_strong_hand(monkeypatch):
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.55)
+    p = Policy(random.Random(9))
+    s = _blind_state(hs("As Kd"), seat=5, dealer=3)
+    seen = {p.decide(s, 5, None, None).action_type for _ in range(200)}
+    assert ActionType.CALL in seen
+
+
+def test_in_position_marginal_call_still_allowed(monkeypatch):
+    # Same marginal hand in position (seat 1, not a blind): the OOP fold rule
+    # must not apply, the +EV call survives.
+    monkeypatch.setattr("pokr.policy.monte_carlo_equity", lambda *a, **k: 0.35)
+    p = Policy(random.Random(9))
+    s = _blind_state(hs("9h 8d"), seat=1, dealer=3)
+    seen = {p.decide(s, 1, None, None).action_type for _ in range(200)}
+    assert ActionType.CALL in seen

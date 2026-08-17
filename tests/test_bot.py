@@ -58,6 +58,6 @@ def test_two_identical_bots_drift_to_mirror():
                       initial_dealer=h % 6)
         g.play_hand()
     d = b0.detector.detect(1, b0.models.summary(1))
-    # With the default 0.66x-pot bet cap the mirror signal is ~0.25 (vs ~0.1-0.15
-    # for non-mirrors), so 0.2 separates mirror from non-mirror.
-    assert d.p_mirror > 0.2
+    # Measured post-OOP-blind-fold (2026-08-18): mirror ~0.20 vs non-mirror
+    # ~0.016 (Maniac control), so 0.18 separates mirror from non-mirror.
+    assert d.p_mirror > 0.18

@@ -29,12 +29,25 @@ _RANGE_AGGR_SPAN = 0.4       # aggression span over _RANGE_AGGR_LO to reach full
 _RANGE_DISCOUNT_MAX = 0.3
 _RANGE_FOLD_STRENGTH = 0.25  # at/above this range strength, a -EV call folds (no bluff-raise rescue)
 _RANGE_CBET_FOLD_MAX = 0.4   # opponents who rarely fold to c-bets call down with strong hands
+_OOP_CALL_EQUITY = 0.42      # min preflop equity to call a raise from SB/BB (OOP realization)
+# ponytail: fixed equity line; position-aware ranges if the blinds still bleed
 
 
 @dataclass
 class _Candidate:
     action: Action
     ev: float
+
+
+def _is_blind(state: GameState, player_id: int) -> bool:
+    """SB/BB seats of the current hand (out of position preflop)."""
+    n = len(state.players)
+    if n == 2:
+        sb, bb = state.dealer, (state.dealer + 1) % 2
+    else:
+        sb = (state.dealer + 1) % n
+        bb = (state.dealer + 2) % n
+    return player_id in (sb, bb)
 
 
 class Policy:
@@ -137,7 +150,20 @@ class Policy:
                 cands.append(_Candidate(Action.check("check"), equity * pot))
             elif t == ActionType.CALL:
                 ev = equity * pot - (1 - equity) * to_call
-                cands.append(_Candidate(Action.call(la.min_amount, "call"), ev))
+                # OOP blind defense (measured 6-max self-play leak): from SB/BB
+                # facing a preflop raise, raw pot odds justify calling almost
+                # any two cards, but postflop realization out of position is
+                # poor — the BB was the worst seat in self-play, bleeding ~10x
+                # the blind cost. Fold marginal hands instead of paying to see
+                # flops OOP. Strong hands still defend. Heads-up is excluded:
+                # measured regression vs PyPokerEngine's HonestPlayer there
+                # (SB defense vs wide ranges is a different game).
+                if (len(state.players) > 2 and state.street == "preflop"
+                        and to_call > 0 and _is_blind(state, player_id)
+                        and equity < _OOP_CALL_EQUITY):
+                    cands.append(_Candidate(Action.fold("oop fold marginal"), 0.0))
+                else:
+                    cands.append(_Candidate(Action.call(la.min_amount, "call"), ev))
             elif t in (ActionType.BET, ActionType.RAISE):
                 fractions = _MIRROR_BET_FRACTIONS if mirror else _BET_FRACTIONS
                 for frac in fractions:
@@ -185,7 +211,16 @@ class Policy:
                     call_la = [x for x in state.legal_actions if x.action_type == ActionType.CALL]
                     if call_la:
                         call_ev = equity * pot - (1.0 - equity) * to_call
-                        if equity >= _VALUE_EQUITY or call_ev > 0:
+                        # Same OOP rule in the fallback: a capped bluff raise
+                        # from the blinds with a marginal hand must not sneak
+                        # back into the call it was just folded for.
+                        oop_marginal = (len(state.players) > 2
+                                        and state.street == "preflop" and to_call > 0
+                                        and _is_blind(state, player_id)
+                                        and equity < _OOP_CALL_EQUITY)
+                        if oop_marginal:
+                            action = Action.fold("oop fallback fold")
+                        elif equity >= _VALUE_EQUITY or call_ev > 0:
                             action = Action.call(call_la[0].min_amount, "risk cap fallback call")
                         else:
                             action = Action.fold("risk cap fallback fold")
