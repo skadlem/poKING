@@ -4,6 +4,35 @@ A research-grade 6-max No-Limit Texas Hold'em poker bot with dynamic risk
 assessment, opponent modeling, and bot/mirror detection. Spec:
 `docs/superpowers/specs/2026-08-06-poker-bot-design.md`.
 
+## Benchmark results
+
+Reference run: seed 7, 2000 hands per matchup, `mc_iters=10`, `--fast` (numba
+equity path), 6-max, 200bb buy-in, no rake, fresh bot per matchup, after the
+aggressor-targeting fix. SE = std error of bb/100 (sqrt(var/hands) x 100);
+rows whose |bb/100| is within ~2 SE of 0 are statistically unresolved.
+
+| matchup | bb/100 | SE | win% | variance (bb²) | read |
+|---|---|---|---|---|---|
+| calling station | **+683** | 124 | 7.5% | 3.1k | strong edge vs a never-folding opponent |
+| tight-aggressive | **−9.9** | 6.9 | 18.4% | 9.5 | below blind cost after the OOP blind fold (50k: −10.2) |
+| maniac | +3,411 | 7020 | 1.5% | 9.9M | unresolved at 2000 hands (SE ≈ 2x estimate); 50k: +18.8k |
+| random | +5,426 | 2001 | 6.2% | 801k | positive but unresolved (fat tails) |
+| self-play | −340 | 175 | 14.9% | 6.1k | ≈ 1.9 SE below 0 at 2000 hands; 50k: −140, unresolved |
+| leak hunter | **+8.8** | 5.7 | 32.2% | 6.4 | exploitability proxy: small positive edge |
+
+Caveats: with `mc_iters=10` equity estimates are coarse, and matchups whose
+variance exceeds ~10⁵ bb² need 50k+ hands to resolve (see HANDOFF.md for the
+long-run reference). Only the calling-station, tight-aggressive, self-play,
+and leak-hunter rows are statistically meaningful at 2000 hands. Fixes that
+measurably improved results: a range-aware fold rule for marginal calls into
+tight betting ranges (−266 → −165 bb/100 vs TAG), a default bet cap of
+0.66× pot (cut stack-shove variance ~6× without killing the mirror signal),
+aggressor targeting (the bot now reads the model of whoever actually bet;
+mixed-lineup total −5703.5 → −2800.0 bb at seed 7/1000 hands), and an
+out-of-position blind fold (marginal preflop calls from SB/BB in 6-max+:
+TAG −15.4 → −9.9, self-play 50k −426 → −140; heads-up excluded — it
+regressed PyPokerEngine's HonestPlayer matchup there).
+
 ## Install
 
     pip install -r requirements.txt
@@ -41,35 +70,6 @@ board, showdown, net result). Example:
       ...
       CallingStation wins 203 with two pair (Ah Qc)
       net: You(pokr) -1 TightAggressive -2 TightAggressive +0 Maniac -200 CallingStation +203 RandomBot +0
-
-## Benchmark results
-
-Reference run: seed 7, 2000 hands per matchup, `mc_iters=10`, `--fast` (numba
-equity path), 6-max, 200bb buy-in, no rake, fresh bot per matchup, after the
-aggressor-targeting fix. SE = std error of bb/100 (sqrt(var/hands) x 100);
-rows whose |bb/100| is within ~2 SE of 0 are statistically unresolved.
-
-| matchup | bb/100 | SE | win% | variance (bb²) | read |
-|---|---|---|---|---|---|
-| calling station | **+683** | 124 | 7.5% | 3.1k | strong edge vs a never-folding opponent |
-| tight-aggressive | **−9.9** | 6.9 | 18.4% | 9.5 | below blind cost after the OOP blind fold (50k: −10.2) |
-| maniac | +3,411 | 7020 | 1.5% | 9.9M | unresolved at 2000 hands (SE ≈ 2x estimate); 50k: +18.8k |
-| random | +5,426 | 2001 | 6.2% | 801k | positive but unresolved (fat tails) |
-| self-play | −340 | 175 | 14.9% | 6.1k | ≈ 1.9 SE below 0 at 2000 hands; 50k: −140, unresolved |
-| leak hunter | **+8.8** | 5.7 | 32.2% | 6.4 | exploitability proxy: small positive edge |
-
-Caveats: with `mc_iters=10` equity estimates are coarse, and matchups whose
-variance exceeds ~10⁵ bb² need 50k+ hands to resolve (see HANDOFF.md for the
-long-run reference). Only the calling-station, tight-aggressive, self-play,
-and leak-hunter rows are statistically meaningful at 2000 hands. Fixes that
-measurably improved results: a range-aware fold rule for marginal calls into
-tight betting ranges (−266 → −165 bb/100 vs TAG), a default bet cap of
-0.66× pot (cut stack-shove variance ~6× without killing the mirror signal),
-aggressor targeting (the bot now reads the model of whoever actually bet;
-mixed-lineup total −5703.5 → −2800.0 bb at seed 7/1000 hands), and an
-out-of-position blind fold (marginal preflop calls from SB/BB in 6-max+:
-TAG −15.4 → −9.9, self-play 50k −426 → −140; heads-up excluded — it
-regressed PyPokerEngine's HonestPlayer matchup there).
 
 ## Comparison with other bots
 
