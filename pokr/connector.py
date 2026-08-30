@@ -24,7 +24,8 @@ def available_plugins() -> list[str]:
     return sorted(_plugins)
 
 
-# Import at the bottom so the rlcard plugin registers itself when the
-# connector is imported. pokr.rlcard_adapter imports rlcard lazily, so this
-# stays optional.
+# Import at the bottom so the plugins register themselves when the connector
+# is imported. Both adapters defer their heavy dependency (rlcard, torch) to
+# first use, so those stay optional.
 from . import rlcard_adapter  # noqa: E402,F401
+from .rl import plugin  # noqa: E402,F401
