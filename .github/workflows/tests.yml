@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        # CPU-only torch: the agent is a 110k-parameter MLP and the bottleneck
+        # is the pure-Python engine, not matmuls, so a CUDA build would be
+        # ~2GB of download for no gain.
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run tests
+        # The suite plays several hundred thousand hands of poker end to end
+        # (~1 min locally). rlcard is not installed here, so its tests skip.
+        run: pytest -q

@@ -1,8 +1,50 @@
 # pokr
 
-A research-grade 6-max No-Limit Texas Hold'em poker bot with dynamic risk
-assessment, opponent modeling, and bot/mirror detection. Spec:
-`docs/superpowers/specs/2026-08-06-poker-bot-design.md`.
+[![tests](https://github.com/skadlem/poKING/actions/workflows/tests.yml/badge.svg)](https://github.com/skadlem/poKING/actions/workflows/tests.yml)
+
+A 6-max No-Limit Hold'em engine, a hand-tuned bot, and a PPO agent trained
+inside that engine — built mainly as an exercise in measuring a strategy's
+edge honestly under very heavy noise.
+
+**What this project is really about.** Poker win rates are dominated by
+variance, and most of the interesting work here turned out to be measurement
+rather than modelling:
+
+- **A benchmark bug inflated measurement variance 2,800x.** The rebuy rule
+  topped up busted players without ever capping a winner, so stacks drifted
+  from 100bb to ~300bb across a session and late hands were played at the
+  wrong depth. Two matchups had been statistically unresolved for the
+  project's entire history; both resolve at 2,000 hands once depth is fixed.
+  The point estimates moved too — the headline "+3,411 bb/100 vs a maniac"
+  was mostly compounding deep-stack pots, not a win rate (it is +290).
+- **The project's own exploitability proxy under-reported by ~70x.** A
+  hand-written adaptive opponent rated the heuristic bot as nearly
+  unexploitable (+14.8 bb/100 in the bot's favour). A best response trained
+  from scratch takes 1,019.7 bb/100 off it.
+- **Training against that proxy made things worse.** Adding it to the
+  training pool flipped its own column (−136 → +1,203 bb/100) while making
+  the agent nearly twice as exploitable by a real best response
+  (879 → 1,294). It is not in the default pool.
+- **Two variance-reduction techniques were implemented and measured honestly
+  rather than assumed.** Duplicate decks buy 1.0-3.5x here, not the 5-10x
+  they buy in bridge, and all-in EV buys 1.0-1.23x — both far less than the
+  depth fix above. The reasoning and the dead ends are recorded in the
+  modules so they are not rediscovered.
+
+**The result.** A PPO agent (110k parameters, ~15 min of CPU training) that
+beats the hand-tuned heuristic by **+604 ± 36 bb/100** heads-up over 30k
+duplicate-deck hands, beats RLCard's DQN by **+979 ± 98** where the heuristic
+manages +222, and is the least exploitable of the four bots measured
+(**670.6 ± 68.8** against the heuristic's 1,019.7).
+
+**What it is not.** 670 bb/100 exploitable is catastrophic in absolute terms —
+a best response wins ~6.7 big blinds per hand, taking a 100bb stack every ~15
+hands. Nothing here is close to equilibrium; the scripted opponents are weak,
+and the honest summary is "a good exploiter of weak static opponents, measured
+carefully." Approximating equilibrium needs Deep CFR or NFSP, which is not
+implemented.
+
+Spec: `docs/superpowers/specs/2026-08-06-poker-bot-design.md`.
 
 ## Benchmark results
 
@@ -52,6 +94,17 @@ heads-up excluded — it regressed PyPokerEngine's HonestPlayer matchup there).
 ## Install
 
     pip install -r requirements.txt
+    pytest -q                              # 243 tests, ~1 min
+
+Torch is only needed for the PPO agent — the engine, the heuristic bot and all
+benchmarks import it lazily and run without it. For a CPU-only build (the
+agent is a 110k-parameter MLP; the bottleneck is the pure-Python engine, not
+matmuls):
+
+    pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+`rlcard` is optional and used only for the external DQN benchmark; its tests
+skip when it is absent.
 
 ## Run a benchmark
 
@@ -222,6 +275,15 @@ Heads-up, 2000 hands each, 10 MC iters, 200bb stacks, seed 7 (checkpoint at
 |---|---|---|---|---|---|
 | RlcardRandom | **+1,545** | 518 | 42.5% | 54k | huge edge vs uniform-shove play |
 | RlcardDQN | **+911** | 413 | 27.1% | 34k | solid edge vs the trained agent |
+
+The PPO agent (`pokr/rl/`) was measured against the same DQN on duplicate
+decks, heads-up, 3000 decks — it takes roughly 4.4x the edge the heuristic
+does off the same third-party opponent:
+
+| | vs RlcardDQN (bb/100, 2 SE) |
+|---|---|
+| **PPO agent** | **+979.5 ± 97.9** |
+| PokerBot (heuristic) | +221.6 ± 103.1 |
 
 Takeaway: pokr wins decisively against both, but the trained DQN is
 meaningfully harder than RLCard's random policy — it cuts pokr's edge by

@@ -10,3 +10,6 @@ ppe_results*.txt
 
 # rlcard training artifacts
 models/
+
+# local writeups / drafts (published separately, not part of the repo)
+docs/writeups/

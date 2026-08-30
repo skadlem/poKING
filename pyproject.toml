@@ -5,7 +5,23 @@ requires-python = ">=3.10"
 dependencies = ["numpy", "numba"]
 
 [project.optional-dependencies]
+# the RL agent (pokr/rl/, train_rl.py); pokr imports torch lazily so the
+# engine, heuristic bot and benchmarks all work without it
+rl = ["torch"]
+# third-party engines/agents used as external references; both imported
+# lazily, and their tests skip when absent
+external = ["pypokerengine", "rlcard"]
 dev = ["pytest"]
+
+# external/ holds PyPokerEngine's own example bots, used as benchmark
+# opponents; it is not part of the distribution. Without this, setuptools sees
+# two top-level packages in a flat layout and refuses to guess.
+[tool.setuptools.packages.find]
+include = ["pokr*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/test_train_rl.py imports the top-level train_rl.py. `python -m pytest`
+# puts the cwd on sys.path and a bare `pytest` does not, so without this the
+# suite passes locally and fails in CI.
+pythonpath = ["."]
