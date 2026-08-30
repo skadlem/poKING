@@ -135,6 +135,12 @@ variance is still huge. Self-play is genuinely negative, not noise around 0.
 
 ## 4. Current measured results (seed 7, 2000 hands, mc_iters=10)
 
+NOTE: the README's main table was re-anchored with `--reset-stacks` (fixed
+100bb depth). The numbers in this section predate that and are the old
+carry-over figures; maniac and random in particular were inflated by
+stack drift (+3,411 → +290, +5,426 → +352) and their variance fell 2,800x
+and 338x respectively. Trust the README.
+
 Internal (own engine, fresh bot per matchup):
 
 | matchup | bb/100 | var |
@@ -249,21 +255,23 @@ logic, not a cap change).
    the heuristic heads-up (+180.4 ± 32.6 bb/100) and 6-max (+753.7 vs +121.1),
    both resolved at ~10 SE on duplicate decks, and is LESS exploitable than
    the heuristic by best-response probe (879.4 ± 101.5 vs 1019.7 ± 89.9).
+   Depth mismatch is FIXED: training and scoring both run at a fixed 100bb
+   via `--reset-stacks`, which took the agent from +180.4 to +604.0 bb/100
+   against the heuristic and cut exploitability 879.4 → 670.6.
    Open follow-ups, in order:
-   a. Everything is still ~900-1300 bb/100 exploitable — nowhere near
+   a. Everything is still ~670-1020 bb/100 exploitable — nowhere near
       equilibrium. Deep CFR / NFSP is the real answer if that matters.
-   b. Train/score depth mismatch: training carries stacks over (inflating to
-      200-300bb) while duplicate evaluation resets to 100bb. `--reset-stacks`
-      exists on both sides now but the main benchmark table has NOT been
-      re-anchored, and no agent has been retrained with it on.
-   c. Do NOT put the leak hunter in the training pool. Measured: it flips the
+   b. Do NOT put the leak hunter in the training pool. Measured: it flips the
       leak-hunter column (−136 → +1203) while making the agent more
       exploitable by a real best response (879 → 1294). The leak hunter
       under-reports exploitability by ~70x and is not a safe training signal.
-   d. Hyperparameters have never been swept; entropy collapsed to 0.59
+      It is available in `--pool` but off by default.
+   c. Hyperparameters have never been swept; entropy collapsed to 0.59
       mid-run once, so `--ent-coef` is the first thing to look at.
-   e. Observation features (equity, opponent model) are unvalidated — an
+   d. Observation features (equity, opponent model) are unvalidated — an
       ablation would say whether the Monte Carlo cost earns its place.
+   e. The PyPokerEngine and RLCard comparison tables were measured under the
+      old carry-over depth and have NOT been re-anchored.
 6. Re-add a bankroll manager (seam stays; SimpleBankrollManager dropped as
    unused 2026-08-18) when a client wires `begin_session` end-to-end.
 7. Consider making `--fast` the default once tuned numbers are re-anchored

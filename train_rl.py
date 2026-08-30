@@ -125,9 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "the weak version and lost 225 bb/100 to the real one.")
     ap.add_argument("--fast", action="store_true",
                     help="use the numba equity fast path")
-    ap.add_argument("--pool", type=str, default="cs,tag,maniac,random,leak,heuristic,league",
+    ap.add_argument("--pool", type=str, default="cs,tag,maniac,random,heuristic,league",
                     help="comma-separated opponent pool "
-                         f"({', '.join(sorted(POOL))}, heuristic, league)")
+                         f"({', '.join(sorted(POOL))}, heuristic, league). "
+                         "'leak' is deliberately NOT in the default: training "
+                         "against the exploitability proxy flips that column "
+                         "(-136 -> +1203 bb/100) while making the agent more "
+                         "exploitable by a real best response (879 -> 1294).")
     ap.add_argument("--league-every", type=int, default=25,
                     help="snapshot the net into the league every N iterations "
                          "(0 disables the league)")

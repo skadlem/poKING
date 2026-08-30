@@ -7,32 +7,47 @@ assessment, opponent modeling, and bot/mirror detection. Spec:
 ## Benchmark results
 
 Reference run: seed 7, 2000 hands per matchup, `mc_iters=10`, `--fast` (numba
-equity path), 6-max, 200bb buy-in, no rake, fresh bot per matchup, after the
-aggressor-targeting fix. SE = std error of bb/100 (sqrt(var/hands) x 100);
-rows whose |bb/100| is within ~2 SE of 0 are statistically unresolved.
+equity path), `--reset-stacks`, 6-max, 100bb stacks, no rake, fresh bot per
+matchup. SE = std error of bb/100 (sqrt(var/hands) x 100); rows whose |bb/100|
+is within ~2 SE of 0 are statistically unresolved.
 
 | matchup | bb/100 | SE | win% | variance (bb²) | read |
 |---|---|---|---|---|---|
-| calling station | **+683** | 124 | 7.5% | 3.1k | strong edge vs a never-folding opponent |
-| tight-aggressive | **−9.9** | 6.9 | 18.4% | 9.5 | below blind cost after the OOP blind fold (50k: −10.2) |
-| maniac | +3,411 | 7020 | 1.5% | 9.9M | unresolved at 2000 hands (SE ≈ 2x estimate); 50k: +18.8k |
-| random | +5,426 | 2001 | 6.2% | 801k | positive but unresolved (fat tails) |
-| self-play | −340 | 175 | 14.9% | 6.1k | ≈ 1.9 SE below 0 at 2000 hands; 50k: −140, unresolved |
-| leak hunter | **+8.8** | 5.7 | 32.2% | 6.4 | exploitability proxy: small positive edge |
-| ppo (self-trained) | −231 | 1092 | 11.2% | 239k | unresolved, and stays that way: at 20k hands it reads +2,812 ± 1,763 — the sign flips. Five learned agents at one table make this row meaningless; the resolved head-to-head is the duplicate-deck run below |
+| calling station | **+518** | 83 | 7.4% | 1.4k | strong edge vs a never-folding opponent |
+| tight-aggressive | −13.7 | 6.9 | 17.9% | 9.6 | at ~2 SE; the one archetype that beats us |
+| maniac | **+290** | 132 | 1.6% | 3.5k | resolved at 2000 hands |
+| random | **+352** | 109 | 4.7% | 2.4k | resolved at 2000 hands |
+| self-play | −52 | 83 | 16.9% | 1.4k | unresolved; no longer clearly negative |
+| leak hunter | **+12.1** | 5.5 | 32.4% | 6.1 | weak exploitability proxy — see Exploitability |
+| ppo (self-trained) | see below | | | | five learned agents at one table; the resolved comparison is the duplicate-deck run |
 
-Caveats: with `mc_iters=10` equity estimates are coarse, and matchups whose
-variance exceeds ~10⁵ bb² need 50k+ hands to resolve (see HANDOFF.md for the
-long-run reference). Only the calling-station, tight-aggressive, self-play,
-and leak-hunter rows are statistically meaningful at 2000 hands. Fixes that
-measurably improved results: a range-aware fold rule for marginal calls into
-tight betting ranges (−266 → −165 bb/100 vs TAG), a default bet cap of
-0.66× pot (cut stack-shove variance ~6× without killing the mirror signal),
-aggressor targeting (the bot now reads the model of whoever actually bet;
-mixed-lineup total −5703.5 → −2800.0 bb at seed 7/1000 hands), and an
-out-of-position blind fold (marginal preflop calls from SB/BB in 6-max+:
-TAG −15.4 → −9.9, self-play 50k −426 → −140; heads-up excluded — it
-regressed PyPokerEngine's HonestPlayer matchup there).
+**These numbers were re-anchored with `--reset-stacks`.** Every hand now starts
+at the nominal 100bb. The previous table carried stacks between hands, and
+because `bench._rebuy` tops up busted players without ever capping a winner,
+chips inflated across a session (measured: 1200 → 1600 chips over 2000 hands,
+max stack 293bb), so late hands were played 2-3x deeper than intended. That
+was the single largest source of variance in this project — far larger than
+anything duplicate decks or all-in EV recovers:
+
+| matchup | carry-over (old) | fixed depth (new) | variance |
+|---|---|---|---|
+| maniac | +3,411 ± 14,041 *(unresolved)* | **+290 ± 264** | 9.86M → 3.5k (**2,800x**) |
+| random | +5,426 ± 4,002 *(unresolved)* | **+352 ± 218** | 801k → 2.4k (**338x**) |
+| self-play | −340 ± 349 | −52 ± 167 | 6.1k → 1.4k (4.4x) |
+| calling station | +683 ± 247 | +518 ± 165 | 3.1k → 1.4k (2.2x) |
+
+The maniac and random rows had been unresolved since the project started;
+both resolve at 2000 hands once depth is held fixed. Note the estimates move
+too, not just the error bars — the old +3,411 vs a maniac was mostly the
+compounding of deep-stack pots, not a real win rate. Pass `--reset-stacks` to
+`python -m pokr.bench` to reproduce; omit it for the historical numbers.
+
+Fixes that measurably improved results: a range-aware fold rule for marginal
+calls into tight betting ranges, a default bet cap of 0.66x pot (cut
+stack-shove variance ~6x without killing the mirror signal), aggressor
+targeting (the bot reads the model of whoever actually bet), and an
+out-of-position blind fold (marginal preflop calls from SB/BB in 6-max+;
+heads-up excluded — it regressed PyPokerEngine's HonestPlayer matchup there).
 
 ## Install
 
@@ -257,7 +272,7 @@ names, since neither a live module nor a factory lambda survives pickling;
 each pins `torch.set_num_threads(1)` and reseeds torch's RNG, because `fork`
 copies the parent's global RNG state byte-for-byte into every child.
 
-Trained 600 iterations x 2000 hands (1.2M hands, 35 min on one CPU core).
+Trained 600 iterations x 2000 hands (1.2M hands, ~15 min across 8 workers).
 Head-to-head vs the heuristic on duplicate decks, PokerBot at its default 150
 MC iterations:
 
@@ -266,14 +281,16 @@ MC iterations:
 | heads-up (40k hands each) | **+180.4 ± 32.6** | −180.4 | +360.9 ± 65.1 | **PPO wins**, ~11 SE |
 | 6-max vs tag, tag, cs, random (16k each) | **+753.7 ± 127.6** | +121.1 ± 46.4 | +632.6 ± 132.5 | **PPO wins**, ~10 SE |
 
-What actually moved the number, measured heads-up against the same
-full-strength heuristic over 40k hands each:
+What actually moved the number, each measured heads-up against the same
+full-strength heuristic on duplicate decks:
 
-| training setup | heads-up vs heuristic |
-|---|---|
-| 6-max only, opponents at 10 MC iters | −225.1 ± 44.2 |
-| + tables sampled from {2, 6}, opponents at 150 MC iters | −122.2 ± 35.8 |
-| + frozen past selves in the pool | **+180.4 ± 32.6** |
+| training setup | heads-up vs heuristic | exploitability |
+|---|---|---|
+| 6-max only, opponents at 10 MC iters | −225.1 ± 44.2 | |
+| + tables sampled from {2, 6}, opponents at 150 MC iters | −122.2 ± 35.8 | |
+| + frozen past selves in the pool | +180.4 ± 32.6 | 879.4 ± 101.5 |
+| + `--reset-stacks` (train at the depth you score at) | **+604.0 ± 36.1** | **670.6 ± 68.8** |
+| (+ leak hunter in the pool — rejected, see Exploitability) | +238.1 ± 33.0 | 1294.3 ± 86.9 |
 
 Each change is worth more than it looks. Training against `PokerBot` weakened
 to 10 MC iterations produced an agent that drew with the weak version and lost
@@ -305,7 +322,8 @@ scored over 4,000 duplicate decks:
 
 | target | exploitability lower bound | leak hunter says |
 |---|---|---|
-| PPO agent (league pool) | **879.4 ± 101.5** | −136.4 ± 199.8 |
+| **PPO agent (shipped: league pool, fixed depth)** | **670.6 ± 68.8** | +468.1 ± 58.0 |
+| PPO agent (league pool, carry-over depth) | 879.4 ± 101.5 | −136.4 ± 199.8 |
 | PokerBot (the heuristic) | 1019.7 ± 89.9 | +14.8 ± 3.9 |
 | PPO agent (leak hunter in pool) | 1294.3 ± 86.9 | +1202.7 ± 268.7 |
 
@@ -334,18 +352,13 @@ Caveats, in order of how much they matter:
 - **The ring win is narrow in what it proves.** Two of the four opponent seats
   are a calling station and a random bot; the agent is substantially
   out-extracting weak players, which is what its training pool rewarded.
-- **Training and scoring happen at different stack depths.** `play_session`
-  carries stacks over (`bench._rebuy` never caps a winner, so a session
-  inflates to 200-300bb) while duplicate evaluation resets every deck to
-  100bb. Measured cost: a best-response exploiter trained under carry-over
-  reached +1282 bb/100 in training and scored −759 at fixed depth — the same
-  policy, two depths. `--reset-stacks` closes the gap on both sides and the
-  exploitability numbers above use it; the main benchmark table does not, and
-  re-anchoring it is unfinished work.
-- **"Better" is not a total order.** The leak-pool agent beats the league
-  agent against the heuristic and against the leak hunter, yet loses to it
-  head-to-head (−128.2 ± 39.2) and is more exploitable. A single matchup is
-  not a ranking.
+- **"Better" needs the exploitability column, not just the win rate.** The
+  leak-pool agent beats the shipped one against the heuristic on some
+  measures and is nearly twice as exploitable. Read both.
+- **"Better" is not a total order.** The shipped agent beats the heuristic
+  3.3x harder than its predecessor and is 24% less exploitable, yet loses to
+  that predecessor head-to-head by −35.8 ± 34.7. A single matchup is not a
+  ranking.
 - Beating the heuristic head-to-head is not the same as playing well. Neither
   has been tested against a strong NLH solver.
 

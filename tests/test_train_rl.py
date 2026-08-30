@@ -74,12 +74,12 @@ def test_unknown_pool_entry_still_rejected_with_league_present(capsys):
     assert "unknown pool" in capsys.readouterr().out
 
 
-def test_leak_hunter_is_in_the_default_pool():
-    """The adaptive counter-model is the only pool member that punishes being
-    predictable rather than being bad."""
+def test_leak_hunter_is_available_but_not_a_default_opponent():
+    """Measured: training against the exploitability proxy flips its own column
+    (-136 -> +1203 bb/100) while making the agent MORE exploitable by a real
+    best response (879 -> 1294). Available for experiments, off by default."""
     assert "leak" in train_rl.POOL
-    assert "leak" in train_rl.build_parser().get_default("pool")
-    assert train_rl.POOL_WEIGHTS["leak"] > 0
+    assert "leak" not in train_rl.build_parser().get_default("pool")
 
 
 def test_workers_default_to_parallel_collection():
