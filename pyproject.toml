@@ -21,3 +21,7 @@ include = ["pokr*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/test_train_rl.py imports the top-level train_rl.py. `python -m pytest`
+# puts the cwd on sys.path and a bare `pytest` does not, so without this the
+# suite passes locally and fails in CI.
+pythonpath = ["."]
