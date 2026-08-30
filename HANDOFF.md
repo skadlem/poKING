@@ -13,7 +13,7 @@ numpy/numba/pytest) built through the full gated process: spec → plan →
 subagent-driven implementation (17 tasks, each TDD + reviewed) → whole-branch
 review → merged.
 
-Core features (all implemented and tested, 124 tests passing):
+Core features (all implemented and tested, 207 tests passing):
 
 - **Deterministic NLHE engine** (`pokr/engine.py`): betting rounds, side pots,
   all-ins, chip-conservation invariants, bot-exception sandboxing, dealer
@@ -84,7 +84,7 @@ Core features (all implemented and tested, 124 tests passing):
 
 ```bash
 pip install -r requirements.txt        # numpy, numba, pytest, pypokerengine
-python -m pytest -q                    # 89 tests, ~3-4 min (drift test is slow)
+python -m pytest -q                    # 207 tests, ~1 min
 
 # Internal benchmark (per-matchup)
 python -m pokr.bench --hands 2000 --seed 7 --mc-iters 10
@@ -97,6 +97,10 @@ python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7
 
 # RLCard benchmark: train a DQN (optional; checkpoint ships in models/, gitignored)
 python train_rlcard_dqn.py --steps 5000000 --seed 7
+# Train the in-engine PPO agent (PyTorch), then benchmark it vs the heuristic
+python train_rl.py --iters 600 --hands-per-iter 2000 --seats 2,6 --fast   # ~35 min CPU
+python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast
+
 # pokr vs RLCard random / trained DQN (heads-up)
 python -m pokr.bench --lineup rlcard --seats 2 --hands 2000 --mc-iters 10 --seed 7
 python -m pokr.bench --lineup rlcard-dqn --seats 2 --hands 2000 --mc-iters 10 --seed 7
@@ -241,10 +245,15 @@ logic, not a cap change).
 3. Run a long (50k+ hand) benchmark to resolve maniac/random/self-play.
    Now affordable in minutes with `bench --fast`.
 4. RLCard: done (DQN trained + benchmarked; plugins "rlcard"/"rlcard-dqn").
-   Optional follow-up: NFSP/self-play for a stronger opponent.
-5. Re-add a bankroll manager (seam stays; SimpleBankrollManager dropped as
+5. In-engine PPO agent: done (`pokr/rl/`, plugin "rl", `train_rl.py`). Beats
+   the heuristic heads-up (+180.4 ± 32.6 bb/100) and 6-max (+753.7 vs +121.1),
+   both resolved at ~10 SE on duplicate decks. Open follow-up: it is MORE
+   exploitable than the heuristic — leak hunter −136.4 ± 199.8 over 20k hands
+   vs the heuristic's +14.8 ± 3.9, with ~50x the variance. Beating a fixed
+   pool is not the same as being hard to counter; that is the next target.
+6. Re-add a bankroll manager (seam stays; SimpleBankrollManager dropped as
    unused 2026-08-18) when a client wires `begin_session` end-to-end.
-6. Consider making `--fast` the default once tuned numbers are re-anchored
+7. Consider making `--fast` the default once tuned numbers are re-anchored
    (the fast path draws a different RNG stream than the pure path).
 
 ## 8. Git state

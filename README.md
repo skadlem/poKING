@@ -19,6 +19,7 @@ rows whose |bb/100| is within ~2 SE of 0 are statistically unresolved.
 | random | +5,426 | 2001 | 6.2% | 801k | positive but unresolved (fat tails) |
 | self-play | −340 | 175 | 14.9% | 6.1k | ≈ 1.9 SE below 0 at 2000 hands; 50k: −140, unresolved |
 | leak hunter | **+8.8** | 5.7 | 32.2% | 6.4 | exploitability proxy: small positive edge |
+| ppo (self-trained) | −231 | 1092 | 11.2% | 239k | unresolved, and stays that way: at 20k hands it reads +2,812 ± 1,763 — the sign flips. Five learned agents at one table make this row meaningless; the resolved head-to-head is the duplicate-deck run below |
 
 Caveats: with `mc_iters=10` equity estimates are coarse, and matchups whose
 variance exceeds ~10⁵ bb² need 50k+ hands to resolve (see HANDOFF.md for the
@@ -71,6 +72,29 @@ board, showdown, net result). Example:
       CallingStation wins 203 with two pair (Ah Qc)
       net: You(pokr) -1 TightAggressive -2 TightAggressive +0 Maniac -200 CallingStation +203 RandomBot +0
 
+## Head-to-head on duplicate decks
+
+`pokr/duplicate.py` compares two bots with less variance than a plain matchup:
+each deck is played twice with the two heroes swapping seats, so a hero holds
+both sets of hole cards and the deal's luck cancels inside its own score.
+
+    python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast
+
+`--a`/`--b` take the same abbreviations as `--lineup` (`--lineup ""` is a
+heads-up match). The report gives each side's bb/100 with a 2 SE bar, the gap,
+whether it is resolved, and how much the pairing actually tightened the
+estimate.
+
+That last number is worth reading rather than assuming. Duplicate scoring buys
+1.0x-3.5x here, not the 5-10x it buys in duplicate bridge, and how much depends
+on how alike the two bots are: 85% of NLHE hands finish under 4bb while the top
+1% carry 42% of all variance, and those big pots only happen when *both*
+players choose to build one. Two similar agents mirror well (3.5x measured, so
+12x fewer hands for the same resolution); a heuristic against a scripted
+archetype barely mirrors at all (1.1x). Hands are cheap (~40k in 12s on the
+numba path), so resolve close matchups with hand count rather than expecting
+the pairing to do it.
+
 ## Comparison with other bots
 
 The bot is benchmarked against three reference classes:
@@ -84,6 +108,10 @@ The bot is benchmarked against three reference classes:
 3. **Leak hunter** (exploitability proxy): an adaptive opponent that models the
    bot's frequencies and counter-adjusts. Near break-even (−1.4 bb/100) means
    the bot is not trivially exploitable by a simple adaptive counter.
+4. **Learned agents**: a PPO agent trained in PyTorch inside this engine
+   (`pokr/rl/`, see below), plus RLCard's DQN as an external reference. These
+   test the heuristic against opponents that were optimized against it rather
+   than hand-written.
 
 External bots (e.g. RLCard/OpenSpiel agents, trained or pretrained) can be
 dropped in through the plugin connector and benchmarked head-to-head:
@@ -171,6 +199,84 @@ agent" row, not a test against a strong NLH solver. At 2 SE the DQN edge is
 statistically solid (+911 ± ~826); the random row is marginal by SE but
 decisive by win rate.
 
+### Measured: pokr vs its own PPO agent (PyTorch, trained in-engine)
+
+The RLCard DQN above is trained in *RLCard's* engine and imported through an
+adapter. `pokr/rl/` instead trains an agent **inside this engine**, so there is
+no train/eval mismatch and the reward is literally the benchmark metric: the
+hand's net bb (`HandResult.winnings[seat] / big_blind`), the same number
+`bench.run_matchup` reports.
+
+The agent plays as an ordinary `Strategy` and records itself — `decide()`
+appends (observation, action mask, action) and `on_hand_end()` stamps the
+hand's result on the trajectory as the terminal reward — so `bench.play_session`
+doubles as the rollout collector and no gym wrapper or thread inversion is
+needed. The 160-dim observation reuses the numba Monte Carlo equity
+(`pokr/_fastcards.py`) and the opponent models (`pokr/models.py`) as features,
+which is what lets a 109k-parameter MLP learn from ~1M hands instead of ~100M.
+Nine discrete actions (fold, check/call, six pot-fraction raises, all-in) are
+masked against the engine's own legal ranges rather than clamped into them.
+
+Opponents each iteration are drawn from a pool of {calling station,
+tight-aggressive, maniac, random, PokerBot, **frozen past selves**}, with table
+size sampled from {2, 6}. The frozen snapshots (`pokr/rl/league.py`, one every
+25 iterations) are what make the difference; see the progression below. This is
+not live self-play, which cycles rather than converging in an
+imperfect-information game — the league opponents are frozen, so each iteration
+still faces a stationary environment.
+
+    python train_rl.py --iters 600 --hands-per-iter 2000 --seats 2,6 --fast   # ~35 min CPU
+    python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast
+
+Trained 600 iterations x 2000 hands (1.2M hands, 35 min on one CPU core).
+Head-to-head vs the heuristic on duplicate decks, PokerBot at its default 150
+MC iterations:
+
+| table | PokrPPO bb/100 | PokerBot bb/100 | gap (2 SE) | read |
+|---|---|---|---|---|
+| heads-up (40k hands each) | **+180.4 ± 32.6** | −180.4 | +360.9 ± 65.1 | **PPO wins**, ~11 SE |
+| 6-max vs tag, tag, cs, random (16k each) | **+753.7 ± 127.6** | +121.1 ± 46.4 | +632.6 ± 132.5 | **PPO wins**, ~10 SE |
+
+What actually moved the number, measured heads-up against the same
+full-strength heuristic over 40k hands each:
+
+| training setup | heads-up vs heuristic |
+|---|---|
+| 6-max only, opponents at 10 MC iters | −225.1 ± 44.2 |
+| + tables sampled from {2, 6}, opponents at 150 MC iters | −122.2 ± 35.8 |
+| + frozen past selves in the pool | **+180.4 ± 32.6** |
+
+Each change is worth more than it looks. Training against `PokerBot` weakened
+to 10 MC iterations produced an agent that drew with the weak version and lost
+to the real one — `--opp-mc-iters` now defaults to PokerBot's own 150. Table
+size has to be trained rather than assumed: the first agent only ever played
+6-max. And the league is what broke a cycle — before it, the second agent beat
+its predecessor's record against the heuristic while *losing* to that
+predecessor head-to-head (−288.5 ± 37.8), ordinary rock-paper-scissors
+non-transitivity. The league agent beats both (+586.8 ± 46.8 vs the second,
++262.2 ± 61.0 vs the first) as well as the heuristic.
+
+The league agent also plays a recognizably different game: VPIP 50.1% / PFR
+41.7% / postflop aggression 0.95, against the heuristic's 52.8% / 16.1% / 0.65.
+Similar looseness, but it raises almost everything it plays instead of calling.
+
+Caveats, in order of how much they matter:
+
+- **It is more exploitable than the heuristic.** Against the leak hunter (the
+  adaptive exploitability proxy) over 20k hands it runs −136.4 ± 199.8 —
+  unresolved, but negative and with ~50x the variance of the heuristic's
+  +14.8 ± 3.9. Beating a fixed pool is not the same as being hard to counter,
+  and this is the number to fix next.
+- **The ring win is narrow in what it proves.** Two of the four opponent seats
+  are a calling station and a random bot; the agent is substantially
+  out-extracting weak players, which is what its training pool rewarded.
+- **"Better" is not a total order.** The non-transitivity above was resolved
+  among these four checkpoints, not in general; a single matchup is not a
+  ranking.
+- Beating the heuristic head-to-head is not the same as playing well. Both are
+  far from equilibrium, and neither has been tested against a strong NLH
+  solver.
+
 ## Module map
 
 - `pokr/cards.py` — Card, Deck, hand evaluator, Monte Carlo equity
@@ -183,7 +289,14 @@ decisive by win rate.
 - `pokr/policy.py` — decision layer: EV, randomization, balanced bluffing
 - `pokr/bot.py` — PokerBot composing the above
 - `pokr/bench.py` — benchmark harness
+- `pokr/duplicate.py` — duplicate-deck head-to-head (variance-reduced A vs B)
 - `pokr/connector.py` — plugin registry for external bots
+- `pokr/rl/encode.py` — GameState → observation vector, action mask, decode
+- `pokr/rl/net.py` — policy/value MLP (PyTorch)
+- `pokr/rl/agent.py` — the agent as a Strategy, recording its own trajectories
+- `pokr/rl/ppo.py` — PPO update (GAE, clipped surrogate, KL early-stop)
+- `pokr/rl/plugin.py` — connector plugin for a trained checkpoint
+- `train_rl.py` — training loop (rollouts via the benchmark harness)
 
 ## Tests
 
