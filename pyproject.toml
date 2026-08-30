@@ -13,5 +13,11 @@ rl = ["torch"]
 external = ["pypokerengine", "rlcard"]
 dev = ["pytest"]
 
+# external/ holds PyPokerEngine's own example bots, used as benchmark
+# opponents; it is not part of the distribution. Without this, setuptools sees
+# two top-level packages in a flat layout and refuses to guess.
+[tool.setuptools.packages.find]
+include = ["pokr*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
