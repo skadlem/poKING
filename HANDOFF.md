@@ -84,7 +84,7 @@ Core features (all implemented and tested, 243 tests passing):
 
 ```bash
 pip install -r requirements.txt        # numpy, numba, pytest, pypokerengine
-python -m pytest -q                    # 243 tests, ~1 min
+python -m pytest -q                    # 243 tests, ~1 min (227 + 1 skip without rlcard)
 
 # Internal benchmark (per-matchup)
 python -m pokr.bench --hands 2000 --seed 7 --mc-iters 10

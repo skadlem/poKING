@@ -1,4 +1,7 @@
 numpy
 numba
+torch
 pytest
 pypokerengine
+# rlcard is optional (used only for the external DQN benchmark; imported
+# lazily, and its tests skip when absent). Install with: pip install rlcard

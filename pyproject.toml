@@ -5,6 +5,12 @@ requires-python = ">=3.10"
 dependencies = ["numpy", "numba"]
 
 [project.optional-dependencies]
+# the RL agent (pokr/rl/, train_rl.py); pokr imports torch lazily so the
+# engine, heuristic bot and benchmarks all work without it
+rl = ["torch"]
+# third-party engines/agents used as external references; both imported
+# lazily, and their tests skip when absent
+external = ["pypokerengine", "rlcard"]
 dev = ["pytest"]
 
 [tool.pytest.ini_options]
