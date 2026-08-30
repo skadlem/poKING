@@ -30,6 +30,7 @@ import torch
 from pokr.bench import (
     bot_own_stats,
     calling_station_factory,
+    leak_hunter_factory,
     maniac_factory,
     play_session,
     random_factory,
@@ -37,10 +38,11 @@ from pokr.bench import (
     tight_aggressive_factory,
 )
 from pokr.bot import PokerBot
-from pokr.rl.agent import RLStrategy
+from pokr.rl.agent import RLStrategy, RolloutBuffer
 from pokr.rl.league import League
 from pokr.rl.net import PolicyValueNet, load, save
 from pokr.rl.ppo import PPOConfig, PPOTrainer
+from pokr.rl.rollout import collect_parallel
 
 # Opponents the agent trains against. The heuristic (PokerBot) is the bot we
 # are ultimately trying to beat, so it earns a seat in the pool.
@@ -49,11 +51,16 @@ POOL = {
     "tag": tight_aggressive_factory,
     "maniac": maniac_factory,
     "random": random_factory,
+    # the adaptive counter-model: it reads the agent's own frequencies and
+    # adjusts, so it is the only pool member that punishes being predictable
+    # rather than being bad. Beating a fixed pool is not the same as being
+    # hard to counter, and the first league agent measured -136 bb/100 here.
+    "leak": leak_hunter_factory,
 }
 # Sampling weights: weighted toward the opponents that actually punish bad play.
 # "league" is a frozen past self (pokr/rl/league.py), not a name in POOL.
 POOL_WEIGHTS = {"cs": 2, "tag": 4, "maniac": 1, "random": 1,
-                "heuristic": 3, "league": 3}
+                "leak": 4, "heuristic": 3, "league": 3}
 
 # Matchups reported at every evaluation, mirroring bench's naming.
 EVAL_MATCHUPS = ("cs", "tag", "random", "heuristic")
@@ -81,33 +88,8 @@ def heuristic_factory(mc_iters: int, mc_fast: bool):
     return factory
 
 
-def build_pool(names: list[str], opp_mc_iters: int, mc_fast: bool,
-               league: League | None = None, rng: random.Random | None = None,
-               agent_mc_iters: int = 0, num_players: int = 6) -> list:
-    """Resolve pool names to opponent factories for one iteration.
-
-    League seats get the agent's OWN equity budget, not the heuristic's: a
-    frozen net must be fed observations encoded the way it was trained, or its
-    equity feature is noise and the past self plays worse than it really did.
-    An empty league (before the first snapshot) falls back to the heuristic.
-    """
-    out = []
-    for name in names:
-        if name == "heuristic":
-            out.append(heuristic_factory(opp_mc_iters, mc_fast))
-        elif name == "league":
-            factory = None
-            if league is not None:
-                factory = league.opponent_factory(
-                    rng or random.Random(), agent_mc_iters, mc_fast, num_players)
-            out.append(factory or heuristic_factory(opp_mc_iters, mc_fast))
-        else:
-            out.append(POOL[name])
-    return out
-
-
 def evaluate(agent: RLStrategy, hands: int, seed: int, seats: int,
-             opp_mc_iters: int, mc_fast: bool) -> dict:
+             opp_mc_iters: int, mc_fast: bool, reset_stacks: bool = False) -> dict:
     """Greedy head-to-head vs each eval matchup, reusing bench.run_matchup so
     the numbers are directly comparable to the README table (incl. SE)."""
     out = {}
@@ -116,7 +98,8 @@ def evaluate(agent: RLStrategy, hands: int, seed: int, seats: int,
                    else POOL[name])
         twin = agent.clone(greedy=True, rng=random.Random(seed + i))
         report = run_matchup(twin, factory, hands, seed + i * 97,
-                             num_seats=seats, name=name)
+                             num_seats=seats, name=name,
+                             reset_stacks=reset_stacks)
         out[name] = report
     return out
 
@@ -142,12 +125,24 @@ def build_parser() -> argparse.ArgumentParser:
                          "the weak version and lost 225 bb/100 to the real one.")
     ap.add_argument("--fast", action="store_true",
                     help="use the numba equity fast path")
-    ap.add_argument("--pool", type=str, default="cs,tag,maniac,random,heuristic,league",
+    ap.add_argument("--pool", type=str, default="cs,tag,maniac,random,leak,heuristic,league",
                     help="comma-separated opponent pool "
                          f"({', '.join(sorted(POOL))}, heuristic, league)")
     ap.add_argument("--league-every", type=int, default=25,
                     help="snapshot the net into the league every N iterations "
                          "(0 disables the league)")
+    ap.add_argument("--reset-stacks", action="store_true",
+                    help="play every training hand at the buy-in. Off by "
+                         "default matches how the published benchmark rows "
+                         "were measured, but note that duplicate evaluation "
+                         "DOES reset: carrying over inflates a session to "
+                         "200-300bb, so training and scoring happen at "
+                         "different depths (measured: an exploiter trained "
+                         "under carry-over reached +1282 bb/100 in training "
+                         "and scored -759 at fixed depth).")
+    ap.add_argument("--workers", type=int, default=8,
+                    help="processes collecting rollouts in parallel; measured "
+                         "553 h/s at 1 worker vs 3305 at 8 on a 10-core box")
     ap.add_argument("--league-size", type=int, default=30,
                     help="max frozen snapshots kept; old ones break cycles, so "
                          "prefer an interval that never fills this")
@@ -195,10 +190,13 @@ def main(argv: list[str] | None = None) -> int:
     os.makedirs(args.ckpt_dir, exist_ok=True)
 
     start_iter = 0
+    resumed_league: list[dict] = []
     if args.resume:
         net, ckpt = load(args.resume)
         start_iter = int(ckpt.get("iteration", 0))
-        print(f"resumed from {args.resume} (iteration {start_iter})")
+        resumed_league = ckpt.get("league") or []
+        print(f"resumed from {args.resume} (iteration {start_iter}, "
+              f"{len(resumed_league)} league snapshots)")
     else:
         net = PolicyValueNet(hidden=tuple(args.hidden))
 
@@ -208,10 +206,14 @@ def main(argv: list[str] | None = None) -> int:
     trainer = PPOTrainer(net, cfg)
     # the opponent-model table is sized for the largest table; smaller ones
     # simply leave the high seat ids unused
+    # rollout collection builds its own agents inside the workers; this one
+    # exists only to seat greedy twins during evaluation
     agent = RLStrategy(net=net, rng=random.Random(args.seed), num_players=max_seats,
-                       mc_iters=args.mc_iters, mc_fast=args.fast, record=True)
+                       mc_iters=args.mc_iters, mc_fast=args.fast, record=False)
 
     league = League(max_size=args.league_size) if args.league_every > 0 else None
+    if league is not None and resumed_league:
+        league.restore(resumed_league, net.config())
     weights = [POOL_WEIGHTS.get(n, 1) for n in pool_names]
     params = sum(p.numel() for p in net.parameters())
     print(f"net {args.hidden} ({params:,} params) | pool {pool_names} | "
@@ -226,17 +228,27 @@ def main(argv: list[str] | None = None) -> int:
             league.snapshot(net)
         seats = random.choice(seats_pool)
         picks = random.choices(pool_names, weights=weights, k=seats - 1)
-        factories = build_pool(picks, args.opp_mc_iters, args.fast, league,
-                               random.Random(args.seed + it), args.mc_iters, max_seats)
-        agent.reset_models()
-        agent.buffer.clear()
+        # one frozen self is pinned per iteration and shipped to the workers;
+        # an empty league (before the first snapshot) falls back to the heuristic
+        league_state = None
+        if "league" in picks:
+            frozen = league.sample(random.Random(args.seed + it)) if league else None
+            if frozen is None:
+                picks = ["heuristic" if p == "league" else p for p in picks]
+            else:
+                league_state = {k: v.clone() for k, v in frozen.state_dict().items()}
 
         t_roll = time.time()
-        per_hand_bb, results = play_session(agent, factories, args.hands_per_iter,
-                                            args.seed + it * 131, num_seats=seats)
+        rollout = collect_parallel(
+            net, picks, args.hands_per_iter, args.seed + it * 131,
+            workers=args.workers, num_seats=seats, mc_iters=args.mc_iters,
+            mc_fast=args.fast, opp_mc_iters=args.opp_mc_iters,
+            league_state=league_state, league_config=net.config(),
+            reset_stacks=args.reset_stacks)
         roll_s = time.time() - t_roll
-        stats = trainer.update(agent.buffer)
-        own = bot_own_stats(results, seat=0)
+        stats = trainer.update(RolloutBuffer(rollout.episodes))
+        own = rollout.own_stats
+        per_hand_bb = rollout.per_hand_bb
 
         print(f"it {it:>4} | {sum(per_hand_bb) / args.hands_per_iter * 100:>+8.1f} bb/100 "
               f"| ent {stats['entropy']:.3f} kl {stats['approx_kl']:+.4f} "
@@ -250,17 +262,20 @@ def main(argv: list[str] | None = None) -> int:
             summary = {}
             for n_seats in seats_pool:
                 reports = evaluate(agent, args.eval_hands, args.seed + 50_000,
-                                   n_seats, args.opp_mc_iters, args.fast)
+                                   n_seats, args.opp_mc_iters, args.fast,
+                                   args.reset_stacks)
                 print(f"  eval {n_seats}max " + "  ".join(
                     f"{n}: {r.bb_per_100:+.1f}+-{2 * r.se_bb_per_100:.0f}"
                     for n, r in reports.items()))
                 summary.update({f"{n}@{n_seats}max": r.bb_per_100
                                 for n, r in reports.items()})
             save(net, os.path.join(args.ckpt_dir, "ppo_latest.pt"),
-                 iteration=it + 1, config=vars(args), eval=summary)
+                 iteration=it + 1, config=vars(args), eval=summary,
+                 league=league.state() if league is not None else [])
 
     final = os.path.join(args.ckpt_dir, "ppo_final.pt")
-    save(net, final, iteration=start_iter + args.iters, config=vars(args))
+    save(net, final, iteration=start_iter + args.iters, config=vars(args),
+         league=league.state() if league is not None else [])
     print(f"done: {args.iters} iters in {(time.time() - t0) / 60:.1f} min -> {final}")
     return 0
 

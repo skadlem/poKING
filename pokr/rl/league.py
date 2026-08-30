@@ -53,6 +53,22 @@ class League:
     def __len__(self) -> int:
         return len(self._nets)
 
+    def state(self) -> list[dict]:
+        """Snapshot weights for checkpointing. Without this, --resume restarts
+        with an empty league and silently discards the single change that most
+        improved the agent."""
+        return [{k: v.clone() for k, v in n.state_dict().items()} for n in self._nets]
+
+    def restore(self, states: list[dict], config: dict) -> None:
+        self._nets.clear()
+        for state in states:
+            net = PolicyValueNet(**config)
+            net.load_state_dict(state)
+            net.eval()
+            net.requires_grad_(False)
+            self._nets.append(net)
+        self.snapshots_taken = max(self.snapshots_taken, len(self._nets))
+
     def sample(self, rng: random.Random) -> PolicyValueNet | None:
         return rng.choice(list(self._nets)) if self._nets else None
 

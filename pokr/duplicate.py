@@ -76,6 +76,7 @@ from typing import Callable, Sequence
 
 import numpy as np
 
+from .allin_ev import allin_adjusted_winnings
 from .cards import Deck, all_cards
 from .engine import PokerGame
 from .strategy import Strategy
@@ -164,8 +165,16 @@ def run_duplicate(
     name_a: str = "a",
     name_b: str = "b",
     on_hand: Callable[[int, object, object], None] | None = None,
+    allin_ev: bool = False,
 ) -> DuplicateReport:
     """Play num_hands duplicate decks. Table size is 2 + len(opponent_factories).
+
+    allin_ev=True stacks a second variance reduction on top of the pairing:
+    when betting locked up before the board was complete, the realized runout
+    is replaced by its expectation over every completion (pokr/allin_ev.py).
+    The two techniques attack different halves of the variance -- pairing
+    removes which cards you were dealt, all-in EV removes how they ran out --
+    so they compose.
 
     Each hero gets TWO instances, one per seat, and each run gets its own
     opponent instances. Stateful bots (PokerBot's per-seat opponent models,
@@ -201,11 +210,15 @@ def run_duplicate(
                              deck=Deck(cards=order, shuffle=False))
             results.append(game.play_hand())
         r1, r2 = results
+        w1, w2 = r1.winnings, r2.winnings
+        if allin_ev:
+            w1 = allin_adjusted_winnings(r1) or w1
+            w2 = allin_adjusted_winnings(r2) or w2
         # A held seat 0 in run 1 and seat 1 in run 2; B the mirror image.
-        singles_a[2 * h] = r1.winnings[0] / big_blind      # A in seat 0
-        singles_a[2 * h + 1] = r2.winnings[1] / big_blind  # A in seat 1
-        singles_b[2 * h] = r1.winnings[1] / big_blind
-        singles_b[2 * h + 1] = r2.winnings[0] / big_blind
+        singles_a[2 * h] = w1[0] / big_blind      # A in seat 0
+        singles_a[2 * h + 1] = w2[1] / big_blind  # A in seat 1
+        singles_b[2 * h] = w1[1] / big_blind
+        singles_b[2 * h + 1] = w2[0] / big_blind
         a_bb[h] = (singles_a[2 * h] + singles_a[2 * h + 1]) / 2
         b_bb[h] = (singles_b[2 * h] + singles_b[2 * h + 1]) / 2
         if on_hand is not None:
@@ -257,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
                          "('self'); 10-30 for fast exploratory runs")
     ap.add_argument("--fast", action="store_true",
                     help="use the numba equity fast path for the heuristic bot")
+    ap.add_argument("--allin-ev", action="store_true",
+                    help="also replace realized all-in runouts with their "
+                         "expectation (pokr/allin_ev.py); composes with the "
+                         "seat-swap pairing")
     args = ap.parse_args(argv)
 
     def resolve(name):
@@ -274,7 +291,8 @@ def main(argv: list[str] | None = None) -> int:
     report = run_duplicate(
         resolve(args.a), resolve(args.b), [resolve(x) for x in abbrs],
         args.hands, args.seed, buy_in=args.buy_in,
-        name_a=LINEUP_NAMES[args.a], name_b=LINEUP_NAMES[args.b])
+        name_a=LINEUP_NAMES[args.a], name_b=LINEUP_NAMES[args.b],
+        allin_ev=args.allin_ev)
     print(f"table: {2 + len(abbrs)} seats"
           + (f", opponents {', '.join(LINEUP_NAMES[x] for x in abbrs)}" if abbrs else " (heads-up)"))
     print(report.format())

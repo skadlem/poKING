@@ -13,7 +13,7 @@ numpy/numba/pytest) built through the full gated process: spec → plan →
 subagent-driven implementation (17 tasks, each TDD + reviewed) → whole-branch
 review → merged.
 
-Core features (all implemented and tested, 207 tests passing):
+Core features (all implemented and tested, 243 tests passing):
 
 - **Deterministic NLHE engine** (`pokr/engine.py`): betting rounds, side pots,
   all-ins, chip-conservation invariants, bot-exception sandboxing, dealer
@@ -84,7 +84,7 @@ Core features (all implemented and tested, 207 tests passing):
 
 ```bash
 pip install -r requirements.txt        # numpy, numba, pytest, pypokerengine
-python -m pytest -q                    # 207 tests, ~1 min
+python -m pytest -q                    # 243 tests, ~1 min
 
 # Internal benchmark (per-matchup)
 python -m pokr.bench --hands 2000 --seed 7 --mc-iters 10
@@ -247,10 +247,23 @@ logic, not a cap change).
 4. RLCard: done (DQN trained + benchmarked; plugins "rlcard"/"rlcard-dqn").
 5. In-engine PPO agent: done (`pokr/rl/`, plugin "rl", `train_rl.py`). Beats
    the heuristic heads-up (+180.4 ± 32.6 bb/100) and 6-max (+753.7 vs +121.1),
-   both resolved at ~10 SE on duplicate decks. Open follow-up: it is MORE
-   exploitable than the heuristic — leak hunter −136.4 ± 199.8 over 20k hands
-   vs the heuristic's +14.8 ± 3.9, with ~50x the variance. Beating a fixed
-   pool is not the same as being hard to counter; that is the next target.
+   both resolved at ~10 SE on duplicate decks, and is LESS exploitable than
+   the heuristic by best-response probe (879.4 ± 101.5 vs 1019.7 ± 89.9).
+   Open follow-ups, in order:
+   a. Everything is still ~900-1300 bb/100 exploitable — nowhere near
+      equilibrium. Deep CFR / NFSP is the real answer if that matters.
+   b. Train/score depth mismatch: training carries stacks over (inflating to
+      200-300bb) while duplicate evaluation resets to 100bb. `--reset-stacks`
+      exists on both sides now but the main benchmark table has NOT been
+      re-anchored, and no agent has been retrained with it on.
+   c. Do NOT put the leak hunter in the training pool. Measured: it flips the
+      leak-hunter column (−136 → +1203) while making the agent more
+      exploitable by a real best response (879 → 1294). The leak hunter
+      under-reports exploitability by ~70x and is not a safe training signal.
+   d. Hyperparameters have never been swept; entropy collapsed to 0.59
+      mid-run once, so `--ent-coef` is the first thing to look at.
+   e. Observation features (equity, opponent model) are unvalidated — an
+      ablation would say whether the Monte Carlo cost earns its place.
 6. Re-add a bankroll manager (seam stays; SimpleBankrollManager dropped as
    unused 2026-08-18) when a client wires `begin_session` end-to-end.
 7. Consider making `--fast` the default once tuned numbers are re-anchored

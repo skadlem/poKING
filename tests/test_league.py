@@ -79,3 +79,50 @@ def test_factory_pins_one_snapshot_for_the_whole_session():
     factory = league.opponent_factory(random.Random(3))
     nets = {id(factory(random.Random(i)).net) for i in range(5)}
     assert len(nets) == 1
+
+
+# -- checkpoint persistence -----------------------------------------------
+
+
+def test_state_restore_round_trip_preserves_behaviour():
+    """--resume used to restart with an empty league, silently discarding the
+    change that most improved the agent."""
+    torch.manual_seed(0)
+    config = {"obs_dim": 16, "num_actions": 9, "hidden": (8,)}
+    league = League()
+    for _ in range(3):
+        league.snapshot(PolicyValueNet(**config))
+    before = [logits(n, 16) for n in [league._nets[i] for i in range(3)]]
+
+    revived = League()
+    revived.restore(league.state(), config)
+
+    assert len(revived) == 3
+    after = [logits(revived._nets[i], 16) for i in range(3)]
+    for a, b in zip(before, after):
+        assert torch.allclose(a, b)
+    assert not any(p.requires_grad for n in revived._nets for p in n.parameters())
+
+
+def test_state_is_detached_from_the_live_snapshots():
+    league = League()
+    net = PolicyValueNet(obs_dim=16, hidden=(8,))
+    league.snapshot(net)
+    saved = league.state()
+    with torch.no_grad():
+        for p in league._nets[0].parameters():
+            p.add_(1.0)
+    revived = League()
+    revived.restore(saved, {"obs_dim": 16, "num_actions": 9, "hidden": (8,)})
+    assert not torch.allclose(logits(revived._nets[0], 16), logits(league._nets[0], 16))
+
+
+def test_restore_into_a_populated_league_replaces_it():
+    config = {"obs_dim": 16, "num_actions": 9, "hidden": (8,)}
+    league = League()
+    for _ in range(4):
+        league.snapshot(PolicyValueNet(**config))
+    other = League()
+    other.snapshot(PolicyValueNet(**config))
+    league.restore(other.state(), config)
+    assert len(league) == 1

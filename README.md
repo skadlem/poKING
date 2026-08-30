@@ -47,6 +47,14 @@ tight-aggressive, maniac, random, self-play, and the leak hunter
 (exploitability proxy). `--mc-iters` sets the Monte Carlo equity iterations
 per decision (default 150; use 10-30 for fast exploratory runs).
 
+`--reset-stacks` plays every hand at the buy-in instead of carrying stacks
+over. Carrying over (the default, and what the table above was measured with)
+tops up busted players but never caps winners, so chips inflate across a
+session: measured with six calling stations, 1200 → 1600 chips over 2000
+hands, with a max stack of 293bb. Late hands in every matchup therefore run
+2-3x deeper than the nominal 100bb, which is part of why the high-variance
+rows never resolve.
+
 ## Play a game against a mixed lineup
 
 The bot can sit at a real 6-max table against a chosen mix of other bots,
@@ -84,6 +92,18 @@ both sets of hole cards and the deal's luck cancels inside its own score.
 heads-up match). The report gives each side's bb/100 with a 2 SE bar, the gap,
 whether it is resolved, and how much the pairing actually tightened the
 estimate.
+
+`--allin-ev` stacks a second, independent reduction on top: when betting
+locked up before the board was complete, the realized runout is replaced by
+its expectation over every completion (`pokr/allin_ev.py`, exact enumeration
+under 200k board completions, Monte Carlo above). The two compose — pairing
+removes which cards you were dealt, all-in EV removes how they ran out. Its
+value depends entirely on how often a matchup produces pre-river all-ins:
+0% of hands in heuristic-vs-tight-aggressive heads-up (the heuristic caps
+bets at 0.66x pot and simply never gets there, so 1.00x), 10% in PPO-vs-
+heuristic heads-up (1.04x), 26% in a shove-heavy 6-max lineup (1.23x). It is
+unbiased — over 4000 hands the adjusted and realized means differ by 39 bb/100
+against a 2 SE of 240.
 
 That last number is worth reading rather than assuming. Duplicate scoring buys
 1.0x-3.5x here, not the 5-10x it buys in duplicate bridge, and how much depends
@@ -225,8 +245,17 @@ not live self-play, which cycles rather than converging in an
 imperfect-information game — the league opponents are frozen, so each iteration
 still faces a stationary environment.
 
-    python train_rl.py --iters 600 --hands-per-iter 2000 --seats 2,6 --fast   # ~35 min CPU
+    python train_rl.py --iters 600 --hands-per-iter 2000 --seats 2,6 --fast
     python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast
+    python -m pokr.rl.exploit --target rl --iters 200        # exploitability
+
+Rollouts are collected across processes (`--workers`, default 8, via
+`pokr/rl/rollout.py`): measured 553 hands/s single-process against 3,305 at 8
+workers on a 10-core box, which takes a 600-iteration run from ~35 minutes to
+~19. Workers rebuild the network from a state dict and their opponents from
+names, since neither a live module nor a factory lambda survives pickling;
+each pins `torch.set_num_threads(1)` and reseeds torch's RNG, because `fork`
+copies the parent's global RNG state byte-for-byte into every child.
 
 Trained 600 iterations x 2000 hands (1.2M hands, 35 min on one CPU core).
 Head-to-head vs the heuristic on duplicate decks, PokerBot at its default 150
@@ -260,22 +289,65 @@ The league agent also plays a recognizably different game: VPIP 50.1% / PFR
 41.7% / postflop aggression 0.95, against the heuristic's 52.8% / 16.1% / 0.65.
 Similar looseness, but it raises almost everything it plays instead of calling.
 
+### Exploitability
+
+Beating a fixed pool is not the same as being hard to counter, so
+`pokr/rl/exploit.py` measures the latter directly: it trains a fresh PPO agent
+from scratch against a frozen target and reports what that exploiter wins.
+That is a lower bound — a real best response does at least as well — so a big
+number proves a leak, while a small one is only evidence of absence in
+proportion to how hard the exploiter tried.
+
+    python -m pokr.rl.exploit --target rl --iters 200
+
+Each exploiter here trained 120 iterations (240k hands) heads-up, then was
+scored over 4,000 duplicate decks:
+
+| target | exploitability lower bound | leak hunter says |
+|---|---|---|
+| PPO agent (league pool) | **879.4 ± 101.5** | −136.4 ± 199.8 |
+| PokerBot (the heuristic) | 1019.7 ± 89.9 | +14.8 ± 3.9 |
+| PPO agent (leak hunter in pool) | 1294.3 ± 86.9 | +1202.7 ± 268.7 |
+
+Three things fall out of that table, and two of them are uncomfortable.
+
+**The leak hunter is a very weak proxy.** It rates the heuristic as nearly
+unexploitable (+14.8 bb/100 in its favour) while a best response trained for
+240k hands takes 1019.7 bb/100 off it — under-reporting by ~70x. It only knows
+a handful of counter-rules, so passing it means little. The rows above are the
+number to trust.
+
+**Training against the proxy corrupts it.** Adding the leak hunter to the
+opponent pool did flip that column (−136 → +1203) — and made the agent
+*more* exploitable by a real best response (879 → 1294). It learned to beat
+one specific counter-strategy at the cost of general robustness, which is
+what training on your own test set looks like. The shipped checkpoint is the
+league-pool agent, not the leak-pool one, on the strength of this table rather
+than the leak-hunter column.
+
+**Every bot here is hugely exploitable.** ~900-1300 bb/100 means none of them
+is remotely near equilibrium; the trained agent is somewhat better than the
+heuristic on this axis, and that is the whole claim.
+
 Caveats, in order of how much they matter:
 
-- **It is more exploitable than the heuristic.** Against the leak hunter (the
-  adaptive exploitability proxy) over 20k hands it runs −136.4 ± 199.8 —
-  unresolved, but negative and with ~50x the variance of the heuristic's
-  +14.8 ± 3.9. Beating a fixed pool is not the same as being hard to counter,
-  and this is the number to fix next.
 - **The ring win is narrow in what it proves.** Two of the four opponent seats
   are a calling station and a random bot; the agent is substantially
   out-extracting weak players, which is what its training pool rewarded.
-- **"Better" is not a total order.** The non-transitivity above was resolved
-  among these four checkpoints, not in general; a single matchup is not a
-  ranking.
-- Beating the heuristic head-to-head is not the same as playing well. Both are
-  far from equilibrium, and neither has been tested against a strong NLH
-  solver.
+- **Training and scoring happen at different stack depths.** `play_session`
+  carries stacks over (`bench._rebuy` never caps a winner, so a session
+  inflates to 200-300bb) while duplicate evaluation resets every deck to
+  100bb. Measured cost: a best-response exploiter trained under carry-over
+  reached +1282 bb/100 in training and scored −759 at fixed depth — the same
+  policy, two depths. `--reset-stacks` closes the gap on both sides and the
+  exploitability numbers above use it; the main benchmark table does not, and
+  re-anchoring it is unfinished work.
+- **"Better" is not a total order.** The leak-pool agent beats the league
+  agent against the heuristic and against the leak hunter, yet loses to it
+  head-to-head (−128.2 ± 39.2) and is more exploitable. A single matchup is
+  not a ranking.
+- Beating the heuristic head-to-head is not the same as playing well. Neither
+  has been tested against a strong NLH solver.
 
 ## Module map
 
@@ -290,11 +362,15 @@ Caveats, in order of how much they matter:
 - `pokr/bot.py` — PokerBot composing the above
 - `pokr/bench.py` — benchmark harness
 - `pokr/duplicate.py` — duplicate-deck head-to-head (variance-reduced A vs B)
+- `pokr/allin_ev.py` — all-in EV adjustment (expectation over board runouts)
 - `pokr/connector.py` — plugin registry for external bots
 - `pokr/rl/encode.py` — GameState → observation vector, action mask, decode
 - `pokr/rl/net.py` — policy/value MLP (PyTorch)
 - `pokr/rl/agent.py` — the agent as a Strategy, recording its own trajectories
 - `pokr/rl/ppo.py` — PPO update (GAE, clipped surrogate, KL early-stop)
+- `pokr/rl/league.py` — frozen past selves used as training opponents
+- `pokr/rl/rollout.py` — multiprocess rollout collection
+- `pokr/rl/exploit.py` — best-response probe (exploitability lower bound)
 - `pokr/rl/plugin.py` — connector plugin for a trained checkpoint
 - `train_rl.py` — training loop (rollouts via the benchmark harness)
 
