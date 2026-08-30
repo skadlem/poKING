@@ -60,7 +60,17 @@ def leak_hunter_factory(rng: random.Random) -> Strategy:
 
 
 def _rebuy(stacks, buy_in):
+    """Top up busted players. Note this never CAPS a winner, so total chips
+    inflate over a session: measured with six CallingStations, 1200 -> 1600
+    chips over 2000 hands with a max stack of 293bb. Late hands in every
+    matchup are therefore played 2-3x deeper than the nominal 100bb, which is
+    a real contributor to the fat tails in the benchmark table. Pass
+    reset_stacks=True to play every hand at the buy-in instead."""
     return [buy_in if s <= 0 else s for s in stacks]
+
+
+def _next_stacks(stacks, buy_in, reset_stacks):
+    return [buy_in] * len(stacks) if reset_stacks else _rebuy(stacks, buy_in)
 
 
 def run_matchup(
@@ -73,7 +83,11 @@ def run_matchup(
     small_blind: int = 1,
     big_blind: int = 2,
     name: str = "",
+    reset_stacks: bool = False,
 ) -> MatchupReport:
+    """reset_stacks=True plays every hand at the buy-in, making hands
+    independent and fixed-depth; the default carries stacks over (see _rebuy),
+    which is what the published README numbers were measured with."""
     rng = random.Random(seed)
     lineup = [bot] + [opponent_factory(random.Random(seed + 1000 * (i + 1)))
                       for i in range(num_seats - 1)]
@@ -83,7 +97,7 @@ def run_matchup(
         game = PokerGame(lineup, stacks, small_blind, big_blind, rng,
                          initial_dealer=h % num_seats)
         result = game.play_hand()
-        stacks = _rebuy(result.ending_stacks, buy_in)
+        stacks = _next_stacks(result.ending_stacks, buy_in, reset_stacks)
         per_hand_bb.append(result.winnings[0] / big_blind)
     total = sum(per_hand_bb)
     bb_per_100 = total / num_hands * 100.0
@@ -102,6 +116,7 @@ def play_session(
     buy_in: int = 200,
     small_blind: int = 1,
     big_blind: int = 2,
+    reset_stacks: bool = False,
 ) -> tuple[list[float], list[HandResult]]:
     """Play num_hands of 6-max poker: `bot` at seat 0, one opponent factory per
     remaining seat (reused across hands so models persist). Returns per-hand bb
@@ -118,7 +133,7 @@ def play_session(
         game = PokerGame(lineup, stacks, small_blind, big_blind, rng,
                          initial_dealer=h % num_seats)
         result = game.play_hand()
-        stacks = _rebuy(result.ending_stacks, buy_in)
+        stacks = _next_stacks(result.ending_stacks, buy_in, reset_stacks)
         per_hand_bb.append(result.winnings[0] / big_blind)
         results.append(result)
     return per_hand_bb, results
@@ -200,11 +215,12 @@ LINEUP_ABBREVS = {
     "self": lambda rng: PokerBot(rng),
     "rlcard": lambda rng: build_strategy("rlcard"),
     "rlcard-dqn": lambda rng: build_strategy("rlcard-dqn"),
+    "rl": lambda rng: build_strategy("rl"),
 }
 LINEUP_NAMES = {
     "cs": "CallingStation", "tag": "TightAggressive", "maniac": "Maniac",
     "random": "RandomBot", "leak": "LeakHunter", "self": "PokerBot",
-    "rlcard": "RlcardRandom", "rlcard-dqn": "RlcardDQN",
+    "rlcard": "RlcardRandom", "rlcard-dqn": "RlcardDQN", "rl": "PokrPPO",
 }
 
 
@@ -227,6 +243,7 @@ def run_benchmark(
     buy_in: int = 200,
     mc_iters: int | None = None,
     mc_fast: bool = False,
+    reset_stacks: bool = False,
 ) -> list[MatchupReport]:
     """Run the full benchmark. mc_iters, when given, is applied to self-play
     opponents and to fresh clones of the primary bot. A FRESH bot is used per
@@ -244,7 +261,7 @@ def run_benchmark(
     factories = list(opponent_factories) if opponent_factories else list(_DEFAULT_FACTORIES)
     reports = [
         run_matchup(fresh_bot(), f, num_hands, seed + i * 97, num_seats=num_seats, buy_in=buy_in,
-                    name=f.__name__)
+                    name=f.__name__, reset_stacks=reset_stacks)
         for i, f in enumerate(factories)
     ]
     if include_self:
@@ -253,11 +270,11 @@ def run_benchmark(
                     else PokerBot(rng, mc_fast=mc_fast))
         reports.append(run_matchup(fresh_bot(), self_factory, num_hands,
                                    seed + 5000, num_seats=num_seats, buy_in=buy_in,
-                                   name="self_play"))
+                                   name="self_play", reset_stacks=reset_stacks))
     if include_leak_hunter:
         reports.append(run_matchup(fresh_bot(), leak_hunter_factory, num_hands,
                                    seed + 9000, num_seats=num_seats, buy_in=buy_in,
-                                   name="leak_hunter"))
+                                   name="leak_hunter", reset_stacks=reset_stacks))
     return reports
 
 
@@ -277,6 +294,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="Play a real 6-max game vs a mixed lineup, e.g. "
                          "'cs,tag,tag,maniac,random' (one abbr per opponent seat: "
                          "cs, tag, maniac, random, leak, self)")
+    ap.add_argument("--reset-stacks", action="store_true",
+                    help="play every hand at the buy-in instead of carrying "
+                         "stacks over. Carrying over inflates chips across a "
+                         "session (see _rebuy), so late hands run 2-3x deeper "
+                         "than nominal; resetting keeps every hand at 100bb. "
+                         "Off by default: the README table was measured with "
+                         "carry-over.")
     ap.add_argument("--replay", type=int, default=None,
                     help="With --lineup: print a human-readable replay of hand N "
                          "(0-based) from the session")
@@ -296,7 +320,8 @@ def main(argv: list[str] | None = None) -> int:
         names = ["You(pokr)"] + [LINEUP_NAMES[a] for a in abbrs]
         bot = PokerBot(random.Random(args.seed), mc_iters=args.mc_iters, mc_fast=args.fast)
         per_hand_bb, results = play_session(bot, factories, args.hands, args.seed,
-                                            num_seats=args.seats, buy_in=args.buy_in)
+                                            num_seats=args.seats, buy_in=args.buy_in,
+                                            reset_stacks=args.reset_stacks)
         total = sum(per_hand_bb)
         bb = total / args.hands * 100.0
         win_rate = sum(1 for w in per_hand_bb if w > 0) / args.hands
@@ -323,7 +348,8 @@ def main(argv: list[str] | None = None) -> int:
                                      mc_fast=args.fast),
                             args.hands, args.seed,
                             num_seats=args.seats, buy_in=args.buy_in,
-                            mc_iters=args.mc_iters, mc_fast=args.fast)
+                            mc_iters=args.mc_iters, mc_fast=args.fast,
+                            reset_stacks=args.reset_stacks)
     print(f"{'matchup':<16}{'hands':>6}{'total_bb':>10}{'bb/100':>10}{'SE':>8}"
           f"{'win%':>8}{'var':>10}")
     for r in reports:

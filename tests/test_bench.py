@@ -79,3 +79,33 @@ def test_format_hand_uses_real_dealer():
                        hand_label="Hand #2 of 5")
     assert "Hand #2 of 5" in text
     assert "dealer" in text
+
+
+def test_reset_stacks_holds_every_hand_at_the_buy_in():
+    """bench._rebuy tops up busted players but never caps winners, so chips
+    inflate across a session and late hands run 2-3x deeper than nominal.
+    reset_stacks=True is the opt-out."""
+    import random
+
+    from pokr.bench import calling_station_factory, play_session
+
+    def final_stacks(reset):
+        hero = calling_station_factory(random.Random(0))
+        _, results = play_session(hero, [calling_station_factory] * 5, 600, 7,
+                                  reset_stacks=reset)
+        return results[-1].starting_stacks
+
+    carried = final_stacks(False)
+    reset = final_stacks(True)
+    assert set(reset) == {200}, "every hand must start at the buy-in"
+    assert sum(reset) == 1200
+    assert max(carried) > 200, "carry-over should have inflated at least one stack"
+
+
+def test_reset_stacks_defaults_off_so_published_numbers_are_unchanged():
+    import inspect
+
+    from pokr.bench import play_session, run_benchmark, run_matchup
+
+    for fn in (run_matchup, play_session, run_benchmark):
+        assert inspect.signature(fn).parameters["reset_stacks"].default is False

@@ -13,7 +13,7 @@ numpy/numba/pytest) built through the full gated process: spec → plan →
 subagent-driven implementation (17 tasks, each TDD + reviewed) → whole-branch
 review → merged.
 
-Core features (all implemented and tested, 124 tests passing):
+Core features (all implemented and tested, 243 tests passing):
 
 - **Deterministic NLHE engine** (`pokr/engine.py`): betting rounds, side pots,
   all-ins, chip-conservation invariants, bot-exception sandboxing, dealer
@@ -84,7 +84,7 @@ Core features (all implemented and tested, 124 tests passing):
 
 ```bash
 pip install -r requirements.txt        # numpy, numba, pytest, pypokerengine
-python -m pytest -q                    # 89 tests, ~3-4 min (drift test is slow)
+python -m pytest -q                    # 243 tests, ~1 min
 
 # Internal benchmark (per-matchup)
 python -m pokr.bench --hands 2000 --seed 7 --mc-iters 10
@@ -97,6 +97,10 @@ python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7
 
 # RLCard benchmark: train a DQN (optional; checkpoint ships in models/, gitignored)
 python train_rlcard_dqn.py --steps 5000000 --seed 7
+# Train the in-engine PPO agent (PyTorch), then benchmark it vs the heuristic
+python train_rl.py --iters 600 --hands-per-iter 2000 --seats 2,6 --fast   # ~35 min CPU
+python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast
+
 # pokr vs RLCard random / trained DQN (heads-up)
 python -m pokr.bench --lineup rlcard --seats 2 --hands 2000 --mc-iters 10 --seed 7
 python -m pokr.bench --lineup rlcard-dqn --seats 2 --hands 2000 --mc-iters 10 --seed 7
@@ -130,6 +134,12 @@ seed-lottery at SE ~1300); at 50k hands the direction flips positive, though the
 variance is still huge. Self-play is genuinely negative, not noise around 0.
 
 ## 4. Current measured results (seed 7, 2000 hands, mc_iters=10)
+
+NOTE: the README's main table was re-anchored with `--reset-stacks` (fixed
+100bb depth). The numbers in this section predate that and are the old
+carry-over figures; maniac and random in particular were inflated by
+stack drift (+3,411 → +290, +5,426 → +352) and their variance fell 2,800x
+and 338x respectively. Trust the README.
 
 Internal (own engine, fresh bot per matchup):
 
@@ -241,10 +251,30 @@ logic, not a cap change).
 3. Run a long (50k+ hand) benchmark to resolve maniac/random/self-play.
    Now affordable in minutes with `bench --fast`.
 4. RLCard: done (DQN trained + benchmarked; plugins "rlcard"/"rlcard-dqn").
-   Optional follow-up: NFSP/self-play for a stronger opponent.
-5. Re-add a bankroll manager (seam stays; SimpleBankrollManager dropped as
+5. In-engine PPO agent: done (`pokr/rl/`, plugin "rl", `train_rl.py`). Beats
+   the heuristic heads-up (+180.4 ± 32.6 bb/100) and 6-max (+753.7 vs +121.1),
+   both resolved at ~10 SE on duplicate decks, and is LESS exploitable than
+   the heuristic by best-response probe (879.4 ± 101.5 vs 1019.7 ± 89.9).
+   Depth mismatch is FIXED: training and scoring both run at a fixed 100bb
+   via `--reset-stacks`, which took the agent from +180.4 to +604.0 bb/100
+   against the heuristic and cut exploitability 879.4 → 670.6.
+   Open follow-ups, in order:
+   a. Everything is still ~670-1020 bb/100 exploitable — nowhere near
+      equilibrium. Deep CFR / NFSP is the real answer if that matters.
+   b. Do NOT put the leak hunter in the training pool. Measured: it flips the
+      leak-hunter column (−136 → +1203) while making the agent more
+      exploitable by a real best response (879 → 1294). The leak hunter
+      under-reports exploitability by ~70x and is not a safe training signal.
+      It is available in `--pool` but off by default.
+   c. Hyperparameters have never been swept; entropy collapsed to 0.59
+      mid-run once, so `--ent-coef` is the first thing to look at.
+   d. Observation features (equity, opponent model) are unvalidated — an
+      ablation would say whether the Monte Carlo cost earns its place.
+   e. The PyPokerEngine and RLCard comparison tables were measured under the
+      old carry-over depth and have NOT been re-anchored.
+6. Re-add a bankroll manager (seam stays; SimpleBankrollManager dropped as
    unused 2026-08-18) when a client wires `begin_session` end-to-end.
-6. Consider making `--fast` the default once tuned numbers are re-anchored
+7. Consider making `--fast` the default once tuned numbers are re-anchored
    (the fast path draws a different RNG stream than the pure path).
 
 ## 8. Git state
