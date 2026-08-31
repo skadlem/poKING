@@ -9,15 +9,25 @@ otherwise.
 
 ## 0. Session 2026-08-31 — NFSP prerequisites
 
-**Branch:** `feat/nfsp-prereqs`, 3 commits, **NOT pushed**, working tree clean.
-Branched off `main` at `170c46c`.
+**Branch:** `feat/nfsp-prereqs`, pushed to origin, working tree clean, no PR
+opened. Branched off `main` at `170c46c`.
 
+    d9516aa fix(exploit): a probe that never cleared break-even bounds nothing
+    fb3799e docs: the betting-history block is 2.9x less exploitable   <- HEADLINE RETRACTED by d9516aa
+    5d19efc docs: record the encoding A/B and the road to NFSP
     d78a8af feat(rl): Kuhn poker harness with exact exploitability
     5917f88 feat(rl): encode betting history, so the observation is an information state
     3053711 docs: design note for NFSP, and why it fits this engine
 
-Full suite: **291 passed** (was 250). Tests take ~1 min idle, ~3.5 min if a
-training or duplicate run is competing for CPU.
+`fb3799e`'s message claims a 2.9x exploitability win from one seed. It does not
+replicate; `d9516aa` retracts it. Both are kept in history on purpose. **Read
+section 0.4 before quoting any number from `fb3799e`.**
+
+Full suite: **296 passed** (was 250). ~1 min idle, ~3.5 min if a training or
+duplicate run is competing for CPU. The venv is `.venv/` and is NOT on the
+default `python3` — use `.venv/bin/python`.
+
+**Nothing was promoted and the README is untouched** (section 0.5).
 
 ### 0.1 What this session was
 
@@ -131,11 +141,24 @@ broken instrument returning a small number that looks like good news.
 never cleared break-even. Tests in `tests/test_exploit.py`. **Check `converged`
 before believing any exploitability number, including future NFSP ones.**
 
-**Not promoted, and README not rewritten.** The history arm does not have the
-evidence to become the shipped checkpoint; `plugin.py` still loads
-`models/rl/ppo_final.pt` and the README's Exploitability section stays as it
-is. Re-open this only with a probe budget large enough that failures are rare
-(more `--iters`), and more than three seeds.
+**Not promoted, and README not rewritten — an explicit decision, 2026-08-31.**
+Promotion was raised and declined after the three-seed table came in.
+`plugin.py` still loads `models/rl/ppo_final.pt` (the obs-160, seed-7,
+no-history agent) and the README's Exploitability section is unchanged, so
+every published number still describes the agent it was measured on.
+
+If promotion is ever revisited, the selection rule that avoids re-selecting on
+the noise this session already retracted: **require a converged probe, then
+take the best duplicate win rate.** That picks `models/ab/s11_hist`
+(+514.46 vs the heuristic, 553.2 exploitable) — NOT `models/rl_history`, whose
+192.3 is the outlier. Note that any such pick is a max over three seeds and so
+is itself optimistically biased. And re-open only with a probe budget large
+enough that failures are rare (more `--iters`) and more than three seeds.
+
+Promotion would also make the README's headline numbers **worse**, not better:
+the history arm wins less against every scripted opponent. That is the expected
+direction (section 8 of the design note) and not a reason on its own to avoid
+it — but it should be a deliberate choice, not a surprise.
 
 ### 0.6 Roadmap to NFSP implemented
 
@@ -164,7 +187,27 @@ Success condition, stated before the run: `exploit.py --target nfsp` well below
 approximator should lose to a max-exploit agent against weak opposition and win
 less against the calling station and the maniac.
 
-### 0.7 Gotchas found this session
+### 0.7 Local artifacts — none of this is in git
+
+`models/` is gitignored in full. On this machine:
+
+| path | what |
+|---|---|
+| `models/rl/` | **the shipped agent**: obs 160, no history, seed 7. What `plugin.py` loads. |
+| `models/rl_history/` | history arm, seed 7 (+461.76 / 192.3). The retracted-outlier one. |
+| `models/ab/s11_hist`, `s11_nohist` | seed 11 pair (+514.46 / 553.2 and +581.80 / 609.7) |
+| `models/ab/s23_hist`, `s23_nohist` | seed 23 pair (+297.64 and +658.72; both probes FAILED) |
+| `models/rl_carry`, `rl_leak`, `rl_v1`, `rl_v2` | older agents from previous sessions |
+| `models/rlcard_dqn/` | the external DQN baseline |
+
+A fresh clone has none of them. Re-training one arm is ~34 min at 8 workers;
+the full three-seed campaign was ~2h45m end to end (train 34 min, duplicate
+1.5 min, probe 4-6 min per arm).
+
+The campaign script is not in the repo either — it was a scratch file. Its
+shape is in section 0.4 and it is ~20 lines to rewrite.
+
+### 0.8 Gotchas found this session
 
 - **`models/` is gitignored.** `models/rl_history/` (the history arm, 11 MB)
   exists only on this machine. Re-training it is 35 min.
