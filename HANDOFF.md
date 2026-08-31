@@ -170,7 +170,7 @@ Strict order. Nothing below step 6 starts until step 6 is green.
 | 2 | Register `"nfsp"` in `plugin.py` with `greedy=False` — the argmax of an approximate equilibrium is maximally exploitable (3.4). Needs `NFSPStrategy` (step 7) to exist; do it there, not as a stub | ~15 lines |
 | 3 | Opponent-model features off (3.2) | already there: `model_opponents=False` zeroes the block |
 | 4 | ~~`pokr/rl/memory.py`~~ **DONE `06f753b`**: `ReservoirBuffer` (Algorithm R) + `ExponentialReservoirBuffer` (0.25 floor), torch/numpy-free. Uniformity asserted via chi-square (calibrated null ~174±19 over 40 seeds; a 5-sigma per-position band was tried, and produced a false failure at position 50 on the unbiased sampler — do not reintroduce it). Exact inclusion product for the floored variant is in the test and brute-force verified | small |
-| 5 | `AvgPolicyNet` + masked cross-entropy trainer, in a NEW module (leave `PolicyValueNet` alone; PPO depends on it) | small |
+| 5 | ~~`AvgPolicyNet`~~ **DONE `1e61456`**: `pokr/rl/avg_policy.py` (not `qnet.py` — ladder B has no QNet). Pi-only net + `fit_avg_policy` masked CE, `save`/`load` with the same reserved-key contract as `net.py`. Illegal slots verified to have exactly 0.0 probability AND 0.0 gradient; `act()` deliberately has no greedy flag (3.4). CE-recover-frequencies property is asserted, which is what makes Pi the fictitious average | small |
 | 6 | **GATE:** FSP on Kuhn, tabular then neural, asserted against `kuhn.exploitability() < 0.05` | the real work |
 | 7 | `pokr/rl/nfsp.py` — `NFSPStrategy`, sigma coin-flip per hand in `on_hand_end`, `br_mode` on `Episode` | medium |
 | 8 | `rollout.py` — both seats recording; build agent 1 outside, seat it with `lambda rng: agent1` | small |
