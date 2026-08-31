@@ -216,11 +216,13 @@ LINEUP_ABBREVS = {
     "rlcard": lambda rng: build_strategy("rlcard"),
     "rlcard-dqn": lambda rng: build_strategy("rlcard-dqn"),
     "rl": lambda rng: build_strategy("rl"),
+    "nfsp": lambda rng: build_strategy("nfsp"),
 }
 LINEUP_NAMES = {
     "cs": "CallingStation", "tag": "TightAggressive", "maniac": "Maniac",
     "random": "RandomBot", "leak": "LeakHunter", "self": "PokerBot",
     "rlcard": "RlcardRandom", "rlcard-dqn": "RlcardDQN", "rl": "PokrPPO",
+    "nfsp": "PokrNFSP",
 }
 
 
