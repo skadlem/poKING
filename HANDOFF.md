@@ -166,8 +166,8 @@ Strict order. Nothing below step 6 starts until step 6 is green.
 
 | # | Work | Size |
 |---|---|---|
-| 1 | Deterministic equity: seed `RLStrategy._equity` from `hash(key)` not `self.rng`, so one info state maps to one observation (design note 3.3) | ~10 lines + test |
-| 2 | Register `"nfsp"` in `plugin.py` with `greedy=False` — the argmax of an approximate equilibrium is maximally exploitable (3.4) | ~15 lines |
+| 1 | ~~Deterministic equity~~ **DONE `44238bf`**: `RLStrategy._equity` seeds `random.Random(hash(key))` per info state; key is ints-only (asserted stable across worker processes). Re-measured the shipped agent on this code: duplicate +633.8 ±31.7 (published +604 ±36) and probe 668.7 ±56.4 (published 670.6) — inside the old bars, no re-anchor needed. Suite 296 -> 300. | ~10 lines + test |
+| 2 | Register `"nfsp"` in `plugin.py` with `greedy=False` — the argmax of an approximate equilibrium is maximally exploitable (3.4). Needs `NFSPStrategy` (step 7) to exist; do it there, not as a stub | ~15 lines |
 | 3 | Opponent-model features off (3.2) | already there: `model_opponents=False` zeroes the block |
 | 4 | `pokr/rl/memory.py` — `ReservoirBuffer` + exponentially-averaged variant. Uniformity over a long stream is assertable | small |
 | 5 | `AvgPolicyNet` + masked cross-entropy trainer, in a NEW module (leave `PolicyValueNet` alone; PPO depends on it) | small |
