@@ -23,8 +23,10 @@ from pokr.rl.encode import (
     ACTION_CHECK_CALL,
     ACTION_FOLD,
     ACTION_NAMES,
+    MAX_SEATS,
     NUM_ACTIONS,
     OBS_DIM,
+    OBS_DIM_V1,
     OBS_SLICES,
     RAISE_FRACTIONS,
     action_mask,
@@ -33,7 +35,7 @@ from pokr.rl.encode import (
     encode_obs,
     raise_target,
 )
-from pokr.strategy import ActionType
+from pokr.strategy import Action, ActionType
 
 # Instance only used for its (self-free) action validator.
 _VALIDATOR = PokerGame([CallingStation()], [200])
@@ -336,3 +338,121 @@ def test_trained_plugin_plays_from_a_checkpoint(tmp_path, capfd):
     _play(agent, 100)
     assert agent._inner is not None
     assert "WARNING: strategy" not in capfd.readouterr().err
+
+
+# -- betting history ------------------------------------------------------
+#
+# Why this block exists: see docs/design/nfsp.md section 3.1. Without it the
+# observation is a snapshot of chip positions, and two different betting lines
+# that arrive at the same chip positions encode identically.
+
+
+def _flop_state_after(history):
+    """Flop, heads-up, 6 chips committed each, no bet yet -- the chip position
+    every preflop line below arrives at. Only action_history differs."""
+    state = make_state(hole="Ah Kd", board="2c 7s Ts", street="flop", pot=12,
+                       current_bet=0, my_committed=6, stacks=(194, 194, 200),
+                       seats=2)
+    for p in state.players:
+        p.committed, p.street_committed = 6, 0
+        p.acted_round = False
+    state.current_bet = 0
+    state.action_history = list(history)
+    state.legal_actions = _VALIDATOR._legal_actions(state, 0)
+    return state
+
+
+LIMP_THEN_RAISED = [(0, "preflop", Action.call(1)),
+                    (1, "preflop", Action.raise_to(6)),
+                    (0, "preflop", Action.call(4))]
+HERO_RAISED = [(0, "preflop", Action.raise_to(6)),
+               (1, "preflop", Action.call(4))]
+
+
+def test_two_preflop_lines_alias_in_the_old_layout_and_separate_in_the_new():
+    a, b = _flop_state_after(LIMP_THEN_RAISED), _flop_state_after(HERO_RAISED)
+    old_a = encode_obs(a, 0, history=False)
+    old_b = encode_obs(b, 0, history=False)
+    assert np.array_equal(old_a, old_b), "pre-history layout should alias here"
+
+    new_a, new_b = encode_obs(a, 0), encode_obs(b, 0)
+    assert not np.array_equal(new_a, new_b)
+    # and the ONLY difference is the history block
+    assert np.array_equal(new_a[:OBS_DIM_V1], new_b[:OBS_DIM_V1])
+    # villain raised in one line, hero in the other
+    ha, hb = new_a[OBS_SLICES["history"]], new_b[OBS_SLICES["history"]]
+    assert int(np.argmax(ha[:MAX_SEATS + 1])) == 1
+    assert int(np.argmax(hb[:MAX_SEATS + 1])) == 0
+
+
+def test_old_layout_is_a_strict_prefix_of_the_new_one():
+    state = _flop_state_after(HERO_RAISED)
+    full = encode_obs(state, 0)
+    old = encode_obs(state, 0, history=False)
+    assert old.shape == (OBS_DIM_V1,) and full.shape == (OBS_DIM,)
+    assert np.array_equal(full[:OBS_DIM_V1], old)
+
+
+def test_aggressor_slots_are_relative_to_the_hero():
+    state = make_state(seats=3)
+    state.action_history = [(2, "preflop", Action.raise_to(6))]
+    width = MAX_SEATS + 1
+    for hero, expected in ((0, 2), (1, 1), (2, 0)):
+        block = encode_obs(state, hero)[OBS_SLICES["history"]]
+        assert int(np.argmax(block[:width])) == expected
+
+
+def test_no_aggressor_lands_in_the_nobody_slot():
+    block = encode_obs(make_state(), 0)[OBS_SLICES["history"]]
+    width = MAX_SEATS + 1
+    assert block[MAX_SEATS] == 1.0                    # preflop: limped
+    assert block[width + MAX_SEATS] == 1.0            # this street: no bet yet
+    assert block[2 * width] == 0.0 and block[2 * width + 1] == 0.0
+
+
+def test_blinds_are_not_counted_as_raises():
+    """The engine posts blinds through _chips_in, which never appends to
+    action_history -- so a preflop raise count is voluntary raises only."""
+    state = make_state()                              # blinds posted, no actions
+    assert state.action_history == []
+    block = encode_obs(state, 0)[OBS_SLICES["history"]]
+    assert block[2 * (MAX_SEATS + 1) + 1] == 0.0
+
+
+def test_raise_counts_are_capped_at_four():
+    state = make_state(seats=2)
+    state.action_history = [(i % 2, "preflop", Action.raise_to(6 * (i + 1)))
+                            for i in range(6)]
+    block = encode_obs(state, 0)[OBS_SLICES["history"]]
+    assert block[2 * (MAX_SEATS + 1)] == 1.0          # this street (preflop)
+    assert block[2 * (MAX_SEATS + 1) + 1] == 1.0      # preflop
+
+
+def test_street_aggressor_resets_but_preflop_aggressor_persists():
+    state = _flop_state_after(HERO_RAISED)            # hero raised preflop
+    width = MAX_SEATS + 1
+    block = encode_obs(state, 0)[OBS_SLICES["history"]]
+    assert int(np.argmax(block[:width])) == 0         # hero, preflop
+    assert block[width + MAX_SEATS] == 1.0            # nobody yet on the flop
+    assert block[2 * width] == 0.0                    # no flop raises
+    assert block[2 * width + 1] == 0.25               # one preflop raise
+
+
+def test_rl_strategy_infers_the_layout_from_the_net():
+    from pokr.rl.net import PolicyValueNet
+
+    assert RLStrategy(net=PolicyValueNet()).history is True
+    assert RLStrategy(net=PolicyValueNet(obs_dim=OBS_DIM_V1)).history is False
+    assert RLStrategy().history is True                # no net: current layout
+    assert RLStrategy(net=PolicyValueNet(), history=False).history is False
+    with pytest.raises(ValueError, match="no known observation layout"):
+        RLStrategy(net=PolicyValueNet(obs_dim=99))
+
+
+def test_clone_keeps_the_layout():
+    """A greedy eval twin that re-encodes at the wrong width feeds the net a
+    vector it was never trained on (or crashes on shape)."""
+    from pokr.rl.net import PolicyValueNet
+
+    agent = RLStrategy(net=PolicyValueNet(obs_dim=OBS_DIM_V1))
+    assert agent.clone(greedy=True).history is False

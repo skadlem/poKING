@@ -22,7 +22,14 @@ from ..bot import PokerBot
 from ..cards import monte_carlo_equity
 from ..models import ModelManager
 from ..strategy import Action, BaseStrategy
-from .encode import NUM_ACTIONS, OBS_DIM, action_mask, decode, encode_obs
+from .encode import (
+    NUM_ACTIONS,
+    OBS_DIM,
+    OBS_DIM_V1,
+    action_mask,
+    decode,
+    encode_obs,
+)
 from .net import PolicyValueNet
 
 
@@ -58,6 +65,29 @@ class RolloutBuffer:
         return sum(len(e.actions) for e in self.episodes)
 
 
+def _infer_history(net: PolicyValueNet | None, history: bool | None) -> bool:
+    """Whether to emit the betting-history block, inferred from the network.
+
+    The observation layout is part of a checkpoint's contract, and obs_dim
+    already records it -- so a checkpoint trained before the history block
+    (models/rl/ppo_final.pt and every README number) keeps getting the exact
+    vectors it was trained on, with no flag to set and no way to set it wrong.
+    An obs_dim matching neither layout is a broken checkpoint and says so here,
+    rather than as a shape error several frames deep in torch.
+    """
+    if history is not None:
+        return history
+    if net is None:
+        return True
+    if net.obs_dim == OBS_DIM:
+        return True
+    if net.obs_dim == OBS_DIM_V1:
+        return False
+    raise ValueError(
+        f"net.obs_dim={net.obs_dim} matches no known observation layout "
+        f"(current {OBS_DIM}, pre-history {OBS_DIM_V1})")
+
+
 class RLStrategy(BaseStrategy):
     """Torch policy playing inside the pokr engine.
 
@@ -77,8 +107,10 @@ class RLStrategy(BaseStrategy):
         greedy: bool = False,
         record: bool = False,
         buffer: RolloutBuffer | None = None,
+        history: bool | None = None,
     ) -> None:
         self.net = net
+        self.history = _infer_history(net, history)
         self.rng = rng or random.Random()
         self.num_players = num_players
         self.model_opponents = model_opponents
@@ -128,7 +160,7 @@ class RLStrategy(BaseStrategy):
         kwargs = dict(net=self.net, rng=self.rng, num_players=self.num_players,
                       mc_iters=self.mc_iters, mc_fast=self.mc_fast,
                       model_opponents=self.model_opponents, greedy=self.greedy,
-                      record=False)
+                      record=False, history=self.history)
         kwargs.update(overrides)
         return RLStrategy(**kwargs)
 
@@ -143,7 +175,7 @@ class RLStrategy(BaseStrategy):
             target = PokerBot._target_opponent(state, player_id, opponents)
             summary = self.models.summary(target)
         return encode_obs(state, player_id, self._equity(state, player_id, len(opponents)),
-                          summary)
+                          summary, history=self.history)
 
     def _equity(self, state, player_id: int, num_opponents: int) -> float | None:
         if self.mc_iters <= 0 or num_opponents <= 0:
