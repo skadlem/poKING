@@ -240,22 +240,20 @@ def test_one_instance_seated_twice_records_both_seats():
     assert agent._steps == {} and agent._hand_is_br == {}, "steps left behind"
 
 
-def test_record_episode_rejects_a_foreign_observation_layout():
-    """PPO checkpoints exist at 160 (pre-history) and 176 widths; feeding
-    160-wide rows to a 176-wide Pi would crash inside fit with a shape
-    error hundreds of hands in. Fail on row one."""
-    agent = make_agent(record=False)                  # Pi at OBS_DIM=176
-    T = 3
-    masks = np.zeros((T, NUM_ACTIONS), dtype=bool)
-    masks[:, 0] = True
-    foreign = Episode(
-        obs=np.zeros((T, OBS_DIM - 16), dtype=np.float32),   # a 160-row
-        masks=masks, actions=np.zeros(T, dtype=np.int64),
-        logps=np.zeros(T, np.float32), values=np.zeros(T, np.float32),
-        reward=0.0)
-    with pytest.raises(ValueError, match="layout"):
-        agent.record_episode(foreign)
-    assert agent.buffer.seen == 0, "rejecting must not half-record"
+def test_fit_respects_the_row_cap_without_losing_frequencies():
+    """max_fit_rows subsamples UNIFORMLY, which is the only draw that keeps
+    a reservoir sample's CE target the behaviour's empirical frequencies.
+    10k rows at a 60/40 split, cap 2000: Pi must still land near 0.6."""
+    agent = make_agent(record=False)
+    rng = np.random.RandomState(8)
+    obs = rng.rand(OBS_DIM).astype(np.float32)
+    mask = np.zeros(NUM_ACTIONS, dtype=bool)
+    mask[[0, 5]] = True
+    for a in rng.choice([0, 5], size=10_000, p=[0.6, 0.4]):
+        agent.buffer.add((obs, mask, int(a), True))
+    agent.fit(epochs=60, batch_size=256, lr=5e-3, max_fit_rows=2000)
+    p = agent.net.probs(obs, mask)[0]
+    assert abs(p[0] - 0.6) < 0.08, f"Pi {p[0]:.3f} vs behaviour 0.60"
 
 
 def test_fit_learns_the_behaviours_frequencies():

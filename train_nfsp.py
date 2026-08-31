@@ -62,6 +62,7 @@ def train(
     fit_epochs: int = 20,
     fit_batch: int = 1024,
     lr: float = 1e-3,
+    max_fit_rows: int = 500_000,
     hidden: tuple[int, ...] = (256, 256),
     ckpt_dir: str = "models/nfsp",
     seed: int = 7,
@@ -74,10 +75,16 @@ def train(
     buffer = ReservoirBuffer(capacity, random.Random(seed + 1))
     cfg = NFSPConfig(capacity=capacity, fit_every=0,     # fits are manual here
                      epochs=fit_epochs, batch_size=fit_batch, lr=lr,
+                     max_fit_rows=max_fit_rows,
                      hidden=hidden)
-    # ONE instance, both seats: the shared net is the point of ladder B
+    # ONE instance, both seats: the shared net is the point of ladder B.
+    # record=False: in this loop every row enters via record_episode from
+    # the harvested BRs. Pi's own decisions would land as br_mode=False
+    # rows — the exact self-imitation data select_fit_rows excludes — and
+    # dilute M_SL's effective capacity ~2x for nothing. The bootstrap path
+    # stays for manual/epsilon use where no BR data exists.
     player = NFSPStrategy(net=net, config=cfg, rng=rng, num_players=2,
-                          model_opponents=False, record=True, buffer=buffer)
+                          model_opponents=False, record=False, buffer=buffer)
     pdir = pathlib.Path(ckpt_dir)
     pdir.mkdir(parents=True, exist_ok=True)
 
@@ -122,6 +129,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--iters", type=int, default=40, help="PPO iters per round")
     ap.add_argument("--hands-per-iter", type=int, default=2000)
     ap.add_argument("--capacity", type=int, default=2_000_000)
+    ap.add_argument("--max-fit-rows", type=int, default=500_000,
+                    help="uniform subsample cap per supervised fit "
+                         "(bounds memory; 0 disables)")
     ap.add_argument("--fit-epochs", type=int, default=20)
     ap.add_argument("--fit-batch", type=int, default=1024)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -132,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     train(rounds=args.rounds, iters_per_round=args.iters,
           hands_per_iter=args.hands_per_iter, capacity=args.capacity,
           fit_epochs=args.fit_epochs, fit_batch=args.fit_batch, lr=args.lr,
+          max_fit_rows=args.max_fit_rows,
           ckpt_dir=args.ckpt_dir, seed=args.seed, quiet=args.quiet)
     print("next: python -m pokr.rl.exploit --target nfsp   (step 10; check "
           "'converged' before quoting the number)")

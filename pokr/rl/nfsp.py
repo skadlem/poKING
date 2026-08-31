@@ -68,6 +68,7 @@ class NFSPConfig:
     epochs: int = 10
     batch_size: int = 256              # also the minimum rows before an auto-fit
     lr: float = 1e-3
+    max_fit_rows: int = 500_000        # cap on rows drawn per fit (see fit)
     behaviour: str = "ppo"             # "ppo" (ladder B) | "epsilon" (ladder A)
     eta: float = 0.1                   # ladder A: P(play the BR this hand)
     eps_start: float = 0.08            # ladder A: eps schedule, paper's start
@@ -227,16 +228,23 @@ class NFSPStrategy(BaseStrategy):
     def fit(self, **overrides) -> float:
         """Supervised fit of Pi on the reservoir; returns the final epoch loss.
 
-        Row selection is the design note 2 contract: BR rows are the
-        behaviour; fitting on Pi's own rows (br_mode=False) merely re-learns
-        the current policy and stalls the fictitious average, so they are
-        used ONLY when no BR rows exist yet — the documented ladder-B
-        bootstrap (and the epsilon-mode degenerate case), never mixed in.
+        Row selection is the design note 2 contract via select_fit_rows
+        (below, pure and tested): BR rows are the behaviour; Pi rows are the
+        documented bootstrap only. When the selected set exceeds
+        max_fit_rows, a UNIFORM subsample is taken — uniform subsampling of
+        a uniform reservoir is still uniform, so the CE target (the
+        behaviour's empirical frequencies) is unchanged; it only bounds
+        memory. An NFSP-grade reservoir is millions of one-176-float rows
+        and np.stack-ing the whole thing per fit is a gigabytes-per-round
+        tax the cap exists to kill.
         """
         cfg = {**vars(self.config), **overrides}
         fit_rows = select_fit_rows(self.buffer.contents())
         if not fit_rows:
             raise ValueError("cannot fit an empty reservoir")
+        cap = cfg["max_fit_rows"]
+        if cap and len(fit_rows) > cap:
+            fit_rows = self.rng.sample(fit_rows, cap)
         obs = np.stack([r[0] for r in fit_rows])
         masks = np.stack([r[1] for r in fit_rows])
         acts = np.array([r[2] for r in fit_rows])
