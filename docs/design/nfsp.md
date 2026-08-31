@@ -2,8 +2,9 @@
 
 **Date:** 2026-08-31
 **Status:** Design accepted. Prerequisites 3.1 (betting history) and the Kuhn
-gate (section 6) are implemented and tested; 3.2-3.4 are not. No NFSP code
-exists yet. Section 10 records what has been measured.
+gate (section 6) are implemented, tested, and 3.1 is now measured as a 2.9x
+exploitability reduction. 3.2-3.4 are not done. No NFSP code exists yet.
+Section 10 records what has been measured.
 **Scope:** heads-up only. Everything below is a two-player zero-sum claim.
 
 ## 1. Why NFSP, and why here
@@ -309,11 +310,40 @@ Report `Pi` sampled, never `Q`, and never greedy.
 
 ## 10. Measured so far
 
-### 10.1 The betting-history block did not help PPO
+### 10.1 The betting-history block: loses on win rate, wins 2.9x on exploitability
 
 Section 3.1 argued the history block on information-state grounds and noted it
-was "worth measuring against the current PPO agent on its own". It was, and it
-lost.
+was "worth measuring against the current PPO agent on its own". Measured on
+both axes, it produces exactly the split this document predicted in section 8:
+**it wins less and is much harder to beat.**
+
+| arm | vs heuristic (bb/100) | exploitability (bb/100) |
+| --- | --- | --- |
+| no history (obs 160, shipped) | +639.51 +- 31.56 | 565.6 +- 60.4 |
+| history (obs 176) | +461.76 +- 24.73 | **192.3 +- 59.1** |
+
+The exploitability gap is 373.4 bb/100, or 8.8 SE -- decisively resolved, and a
+2.94x reduction. At 192.3 the history arm is by a wide margin the least
+exploitable agent measured in this project (the heuristic is 1019.7, the
+shipped PPO agent 670.6).
+
+Both probes trained 120 iterations (240k hands) at seed 7 and scored 5,000
+duplicate decks at both deployments, so the comparison is like for like.
+
+**Caveat that limits the absolute number, not the comparison.** Exploitability
+here is a LOWER bound from a probe that tried a fixed amount, so a small number
+is evidence of absence only in proportion to how hard the exploiter tried. 192.3
+may partly mean "harder for a 120-iteration probe to crack" rather than "3x
+closer to equilibrium". A longer probe would firm the absolute up; it would not
+change the ranking, since both arms got the same budget.
+
+Note also that this run reads the shipped agent at 565.6 where the README
+reports 670.6 +- 68.8 -- a different probe seed and 5,000 decks rather than
+4,000, about 1.5 combined SE apart. Not chased down.
+
+#### The win-rate half, which lost
+
+
 
 Both arms trained with the shipped checkpoint's exact config (600 iters x 2000
 hands, seats 2,6, `--fast --reset-stacks`, seed 7, 8 workers), then scored on
@@ -327,16 +357,22 @@ hands, seats 2,6, `--fast --reset-stacks`, seed 7, 8 workers), then scored on
 -178 bb/100, resolved well outside the bars. One seed per arm, so one sample
 rather than a measurement.
 
+Read together with the exploitability column, this is not a regression: it is
+the max-exploit / robustness tradeoff, and it is the trade this document exists
+to make. An agent that gives up 178 bb/100 against a weak scripted opponent to
+be 2.9x harder to counter is moving in the direction NFSP is aimed at.
+
 The likely mechanism is that 16 extra input dimensions, with an unchanged
 network, unchanged hyperparameters and the same 1.2M-hand budget, cost more in
 credit assignment than the aliasing fix pays back. Note also that "beats the
 heuristic harder" is the max-exploit metric, which is the opposite of what this
 block is for.
 
-**Not reverted.** The block is a correctness requirement for the method in this
-document -- an average over aliased information states is an equilibrium of no
-game -- not a performance optimization, and it is opt-out via `--no-history`.
-But nothing in this repo should claim it helps PPO.
+**Kept, and now on evidence rather than principle.** The block was always a
+correctness requirement for the method in this document -- an average over
+aliased information states is an equilibrium of no game -- and it survives on
+that ground alone. The exploitability column says it also pays for itself.
+What should still not be claimed is that it makes PPO win more; it does not.
 
 **Ruled out:** the history arm ends training at entropy 0.188 and PFR 0.0%,
 which resembles the entropy collapse recorded in HANDOFF section 7c. It is not
@@ -344,14 +380,10 @@ one. The shipped arm ends at 0.220 / 1.7%, and in both logs the low-entropy
 lines are the 6-max iterations while the heads-up lines sit at 0.6-0.7. It is a
 table-size artifact of the per-iteration statistics.
 
-**Open.** The decisive measurement is exploitability, not win rate:
+**Still open:** one seed per arm on both axes. 2-3 seeds each is the only way
+the -178 and the 373.4 become facts rather than anecdotes. Reproduce with:
 
     POKR_RL_CKPT=models/rl_history/ppo_final.pt python -m pokr.rl.exploit --target rl --iters 120
-
-against the shipped agent's 670.6 +- 68.8. Less exploitable while winning less
-is the signature this document predicts, and would make the block's case. More
-exploitable means the sixteen dimensions should be reconsidered before NFSP is
-built on them.
 
 ### 10.2 The Kuhn harness certifies itself
 

@@ -72,7 +72,7 @@ off-by-one. This project's headline finding is that its own exploitability
 proxy under-reported by ~70x; running an unvalidated equilibrium algorithm
 against an approximate metric is that same trap.
 
-### 0.4 A/B of the encoding — the history block LOST
+### 0.4 A/B of the encoding — loses on win rate, wins 2.9x on exploitability
 
 Both arms trained with the shipped checkpoint's exact config
 (`--iters 600 --hands-per-iter 2000 --seats 2,6 --fast --reset-stacks
@@ -101,32 +101,49 @@ Two things a new session must not re-derive wrong:
   also confirms the 160-dim checkpoint still plays correctly through the new
   `encode.py`. The ~35 bb/100 gap was NOT chased down.
 
-**The read, honestly:** 16 extra input dims with an unchanged net, unchanged
-hyperparameters and the same 1.2M-hand budget cost more in credit assignment
-than the aliasing fix paid back *on this metric*. And "beats the heuristic
-harder" is the max-exploit metric — the opposite of what the block is for.
+**Then the decisive half was run, and it flips the verdict.** Best-response
+probe, 120 iters (240k hands) at seed 7, scored on 5,000 duplicate decks at
+both deployments — identical budget for both arms:
 
-**Not reverted, deliberately.** The block is a correctness requirement for NFSP
-(an average over aliased information states is an equilibrium of no game), not
-a performance optimization, and it is opt-out via `--no-history`. But do not
-claim it helps PPO — on the evidence it does not.
+| arm | vs heuristic (bb/100) | exploitability (bb/100) |
+|---|---|---|
+| no history (obs 160, shipped) | +639.51 ± 31.56 | 565.6 ± 60.4 |
+| history (obs 176) | +461.76 ± 24.73 | **192.3 ± 59.1** |
 
-### 0.5 The open question, and the command that answers it
+Gap 373.4 bb/100 = **8.8 SE**, a **2.94x** reduction. At 192.3 the history arm
+is by a wide margin the least exploitable agent measured in this project —
+heuristic 1019.7, shipped PPO 670.6.
 
-Exploitability, not win rate, is the metric that decides whether the block
-earns its place. ~25 min for both arms:
+**The read:** this is the max-exploit / robustness tradeoff, not a regression.
+The block gives up 178 bb/100 against a weak scripted opponent to be 2.9x
+harder to counter, which is the direction NFSP is aimed at and exactly the
+signature the design note predicted in its section 8 before the run.
 
-    POKR_RL_CKPT=models/rl/ppo_final.pt         .venv/bin/python -m pokr.rl.exploit --target rl --iters 120
+**Caveats.** Exploitability is a LOWER bound from a probe that tried a fixed
+amount, so 192.3 may partly mean "harder for a 120-iteration probe to crack"
+rather than "3x closer to equilibrium" — a longer probe would firm the absolute
+up without changing the ranking, since both arms got the same budget. This run
+also reads the shipped agent at 565.6 where the README says 670.6 ± 68.8
+(different probe seed, 5,000 decks vs 4,000, ~1.5 combined SE); not chased down.
+
+**Kept, and now on evidence rather than principle.** Do not claim it makes PPO
+win more — it does not.
+
+### 0.5 What is still open
+
+**One seed per arm, on both axes.** 2-3 seeds each (~3.5 h of training plus
+~1 h of probes) is the only way the −178 and the 373.4 become facts rather than
+anecdotes. Reproduce either column with:
+
+    POKR_RL_CKPT=models/rl_history/ppo_final.pt .venv/bin/python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast
     POKR_RL_CKPT=models/rl_history/ppo_final.pt .venv/bin/python -m pokr.rl.exploit --target rl --iters 120
 
-Shipped agent's reference number is **670.6 ± 68.8**. If the history arm is
-*less* exploitable while winning less, that is exactly the signature the design
-note predicts and it makes the block's case. If it is more exploitable, the
-block is not pulling its weight and the 16 dims should be reconsidered before
-NFSP is built on them.
-
-Also unresolved: **one seed per arm.** 2-3 seeds per arm would cost ~3.5 h and
-is the only way the −178 becomes a fact rather than an anecdote.
+**README not updated.** Its Exploitability section still presents the shipped
+agent (670.6) as the least exploitable bot measured, which is true *of the
+shipped checkpoint* — `models/rl_history/` is gitignored and is not what
+`plugin.py` loads by default. Whether to promote the history arm to the shipped
+checkpoint, and rewrite that section around it, is a judgement call that was
+deliberately left open: it rests on one seed.
 
 ### 0.6 Roadmap to NFSP implemented
 
