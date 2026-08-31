@@ -2,9 +2,9 @@
 
 **Date:** 2026-08-31
 **Status:** Design accepted. Prerequisites 3.1 (betting history) and the Kuhn
-gate (section 6) are implemented, tested, and 3.1 is now measured as a 2.9x
-exploitability reduction. 3.2-3.4 are not done. No NFSP code exists yet.
-Section 10 records what has been measured.
+gate (section 6) are implemented and tested. 3.2-3.4 are not done. No NFSP code
+exists yet. Section 10 records what has been measured, including a single-seed
+result that did NOT replicate -- read it before quoting any number from here.
 **Scope:** heads-up only. Everything below is a two-player zero-sum claim.
 
 ## 1. Why NFSP, and why here
@@ -310,82 +310,77 @@ Report `Pi` sampled, never `Q`, and never greedy.
 
 ## 10. Measured so far
 
-### 10.1 The betting-history block: loses on win rate, wins 2.9x on exploitability
+### 10.1 The betting-history block, over three seeds
 
-Section 3.1 argued the history block on information-state grounds and noted it
-was "worth measuring against the current PPO agent on its own". Measured on
-both axes, it produces exactly the split this document predicted in section 8:
-**it wins less and is much harder to beat.**
+Section 3.1 argued the block on information-state grounds and noted it was
+"worth measuring against the current PPO agent on its own". Three training
+seeds (7, 11, 23) x two arms, each arm trained on the shipped checkpoint's
+config (600 iters x 2000 hands, seats 2,6, `--fast --reset-stacks`, 8 workers)
+and scored two ways: 20k duplicate decks heads-up against the heuristic, and a
+best-response probe (120 iters, 240k hands, probe seed fixed at 7, 5,000
+duplicate decks).
 
-| arm | vs heuristic (bb/100) | exploitability (bb/100) |
-| --- | --- | --- |
-| no history (obs 160, shipped) | +639.51 +- 31.56 | 565.6 +- 60.4 |
-| history (obs 176) | +461.76 +- 24.73 | **192.3 +- 59.1** |
+**Win rate against the heuristic** -- all three seeds usable:
 
-The exploitability gap is 373.4 bb/100, or 8.8 SE -- decisively resolved, and a
-2.94x reduction. At 192.3 the history arm is by a wide margin the least
-exploitable agent measured in this project (the heuristic is 1019.7, the
-shipped PPO agent 670.6).
+| seed | history | no history | difference |
+| --- | --- | --- | --- |
+| 7 | +461.76 | +639.51 | -177.75 |
+| 11 | +514.46 | +581.80 | -67.34 |
+| 23 | +297.64 | +658.72 | -361.08 |
+| **mean** | **+424.62** | **+626.68** | **-202.06** |
 
-Both probes trained 120 iterations (240k hands) at seed 7 and scored 5,000
-duplicate decks at both deployments, so the comparison is like for like.
+The block costs win rate against the heuristic, consistently, on every seed.
+That is settled. Note also the between-seed spread: 217 bb/100 for the history
+arm against 77 for the no-history arm, so the block also makes training
+noticeably less stable.
 
-**Caveat that limits the absolute number, not the comparison.** Exploitability
-here is a LOWER bound from a probe that tried a fixed amount, so a small number
-is evidence of absence only in proportion to how hard the exploiter tried. 192.3
-may partly mean "harder for a 120-iteration probe to crack" rather than "3x
-closer to equilibrium". A longer probe would firm the absolute up; it would not
-change the ranking, since both arms got the same budget.
+**Exploitability** -- only two of three seeds produced a usable probe:
 
-Note also that this run reads the shipped agent at 565.6 where the README
-reports 670.6 +- 68.8 -- a different probe seed and 5,000 decks rather than
-4,000, about 1.5 combined SE apart. Not chased down.
+| seed | history | no history | difference |
+| --- | --- | --- | --- |
+| 7 | 192.3 | 565.6 | -373.3 |
+| 11 | 553.2 | 609.7 | -56.5 |
+| 23 | *probe failed* | *probe failed* | -- |
 
-#### The win-rate half, which lost
+**The 2.9x exploitability reduction reported from seed 7 alone did not
+replicate.** At seed 11 the same comparison gives 56.5 bb/100, which is inside
+a single probe's own +-60 bar. Both usable seeds point the same direction --
+the history arm is less exploitable -- but with magnitudes of 373 and 57 from
+n=2, the size of the effect is unestablished and 192.3 now looks like the
+outlier rather than the effect. Do not quote it.
 
+**Honest current reading.** The block reliably costs ~200 bb/100 against a weak
+scripted opponent. It is probably somewhat less exploitable, unquantified. It
+is kept on the grounds section 3.1 gives -- an average over aliased information
+states is an equilibrium of no game -- which is a correctness argument that
+does not depend on either measurement. It has not earned a performance claim.
 
+### 10.2 The probe fails about a third of the time, silently
 
-Both arms trained with the shipped checkpoint's exact config (600 iters x 2000
-hands, seats 2,6, `--fast --reset-stacks`, seed 7, 8 workers), then scored on
-20k duplicate decks heads-up against the heuristic at 150 MC iterations:
+Both seed-23 probes finished with the exploiter below break-even:
 
-| arm | bb/100 vs heuristic |
-| --- | --- |
-| no history (obs 160, shipped checkpoint) | +639.51 +- 31.56 |
-| history (obs 176) | +461.76 +- 24.73 |
+    seed 23, history:    training curve -341 -> +27,  eval  +14.95 +- 7.15
+    seed 23, no history: training curve -410 -> -91,  eval  -61.67 +- 41.91
 
--178 bb/100, resolved well outside the bars. One seed per arm, so one sample
-rather than a measurement.
+An exploiter that never became a best response bounds nothing. But
+`ExploitReport.exploitability` clamps negatives to zero, so these printed as
+"exploitability lower bound: 14.9" and "0.0" -- numbers that read as *the least
+exploitable agents ever measured in this project*, against targets whose
+sibling seeds measured 553.2 and 609.7. Two of six probes in this campaign
+failed this way.
 
-Read together with the exploitability column, this is not a regression: it is
-the max-exploit / robustness tradeoff, and it is the trade this document exists
-to make. An agent that gives up 178 bb/100 against a weak scripted opponent to
-be 2.9x harder to counter is moving in the direction NFSP is aimed at.
+This is the same failure shape as the leak hunter under-reporting by 70x, one
+layer up: a broken instrument returning a small number that looks like good
+news. `ExploitReport` now carries `converged`, and `format()` prints
+`PROBE FAILED ... bounds NOTHING` instead of a lower bound when the exploiter
+never cleared break-even. Covered by tests in `tests/test_exploit.py`.
 
-The likely mechanism is that 16 extra input dimensions, with an unchanged
-network, unchanged hyperparameters and the same 1.2M-hand budget, cost more in
-credit assignment than the aliasing fix pays back. Note also that "beats the
-heuristic harder" is the max-exploit metric, which is the opposite of what this
-block is for.
+**Consequence for section 8.** The success condition there is "the probe on Pi
+drops well below 670.6". That is only readable if the probe converged. Check
+`converged` before believing any NFSP result, and treat a failed probe as a
+missing measurement rather than a good one.
 
-**Kept, and now on evidence rather than principle.** The block was always a
-correctness requirement for the method in this document -- an average over
-aliased information states is an equilibrium of no game -- and it survives on
-that ground alone. The exploitability column says it also pays for itself.
-What should still not be claimed is that it makes PPO win more; it does not.
-
-**Ruled out:** the history arm ends training at entropy 0.188 and PFR 0.0%,
-which resembles the entropy collapse recorded in HANDOFF section 7c. It is not
-one. The shipped arm ends at 0.220 / 1.7%, and in both logs the low-entropy
-lines are the 6-max iterations while the heads-up lines sit at 0.6-0.7. It is a
-table-size artifact of the per-iteration statistics.
-
-**Still open:** one seed per arm on both axes. 2-3 seeds each is the only way
-the -178 and the 373.4 become facts rather than anecdotes. Reproduce with:
-
-    POKR_RL_CKPT=models/rl_history/ppo_final.pt python -m pokr.rl.exploit --target rl --iters 120
-
-### 10.2 The Kuhn harness certifies itself
+### 10.3 The Kuhn harness certifies itself
 
 `pokr/rl/kuhn.py`, `tests/test_kuhn.py` (39 tests):
 
@@ -395,7 +390,9 @@ the -178 and the 373.4 become facts rather than anecdotes. Reproduce with:
 | `uniform()` | 11/24 | +1/8 |
 
 The episode generator is pinned against the analytic tree walk over 40k hands,
-so a learner cannot train on one game and be scored on another.
+so a learner cannot train on one game and be scored on another. Note that this
+is exactly the property section 10.2 shows the NLHE probe lacks -- which is the
+whole reason the gate exists.
 
 ## 11. References
 

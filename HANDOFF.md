@@ -72,78 +72,70 @@ off-by-one. This project's headline finding is that its own exploitability
 proxy under-reported by ~70x; running an unvalidated equilibrium algorithm
 against an approximate metric is that same trap.
 
-### 0.4 A/B of the encoding — loses on win rate, wins 2.9x on exploitability
+### 0.4 A/B of the encoding — three seeds, and a retracted headline
 
-Both arms trained with the shipped checkpoint's exact config
-(`--iters 600 --hands-per-iter 2000 --seats 2,6 --fast --reset-stacks
---workers 8 --seed 7`), 35.2 min each at ~2-4k h/s. Scored on 20k duplicate
-decks heads-up vs the heuristic at 150 MC iters.
+Seeds 7, 11, 23 x two arms. Each arm: 600 iters x 2000 hands, seats 2,6,
+`--fast --reset-stacks`, 8 workers (~34 min); scored on 20k duplicate decks vs
+the heuristic and by a best-response probe (120 iters, probe seed fixed at 7,
+5,000 decks). Checkpoints in `models/ab/s{seed}_{hist,nohist}/` (gitignored).
 
-| arm | checkpoint | bb/100 vs heuristic |
-|---|---|---|
-| no history (obs 160) | `models/rl/ppo_final.pt` (shipped) | **+639.51 ± 31.56** |
-| history (obs 176) | `models/rl_history/ppo_final.pt` | **+461.76 ± 24.73** |
+**Win rate vs the heuristic (bb/100)** — all three seeds usable:
 
-−178 bb/100, resolved well outside the bars. **One seed per arm — this is one
-sample, not a measurement.**
+| seed | history | no history | diff |
+|---|---|---|---|
+| 7 | +461.76 | +639.51 | −177.75 |
+| 11 | +514.46 | +581.80 | −67.34 |
+| 23 | +297.64 | +658.72 | −361.08 |
+| **mean** | **+424.62** | **+626.68** | **−202.06** |
 
-Two things a new session must not re-derive wrong:
+Settled: the block costs ~200 bb/100 against the heuristic on every seed. It
+also destabilises training — between-seed spread 217 for history vs 77 without.
 
-- **There was no entropy collapse in the history arm.** It ends at ent 0.188 /
-  PFR 0.0%, which looks like the failure mode section 7c warns about — but the
-  shipped arm ends at ent 0.220 / PFR 1.7%. In BOTH logs the low-entropy lines
-  are the **6-max** iterations and the heads-up-vs-tag lines sit at 0.6-0.7.
-  It is a table-size artifact of per-iteration stats. Whole-run entropy at it
-  500 is 0.578 (shipped) vs 0.367 (history) — mildly lower, a hint, not an
-  explanation.
-- **Arm A reproduces the shipped agent at +639.5 where the README says
-  +604.0 ± 36.1.** Same checkpoint, so this is an eval-seed difference and it
-  also confirms the 160-dim checkpoint still plays correctly through the new
-  `encode.py`. The ~35 bb/100 gap was NOT chased down.
+**Exploitability (bb/100)** — only 2 of 3 seeds produced a usable probe:
 
-**Then the decisive half was run, and it flips the verdict.** Best-response
-probe, 120 iters (240k hands) at seed 7, scored on 5,000 duplicate decks at
-both deployments — identical budget for both arms:
+| seed | history | no history | diff |
+|---|---|---|---|
+| 7 | 192.3 | 565.6 | −373.3 |
+| 11 | 553.2 | 609.7 | −56.5 |
+| 23 | *probe failed* | *probe failed* | — |
 
-| arm | vs heuristic (bb/100) | exploitability (bb/100) |
-|---|---|---|
-| no history (obs 160, shipped) | +639.51 ± 31.56 | 565.6 ± 60.4 |
-| history (obs 176) | +461.76 ± 24.73 | **192.3 ± 59.1** |
+**RETRACTED: the "2.9x less exploitable" headline in commit `fb3799e` does not
+replicate.** Seed 11 gives a 56.5 gap, inside a single probe's ±60 bar. Both
+usable seeds favour history directionally, but at 373 and 57 from n=2 the
+magnitude is unestablished, and seed 7's 192.3 is the outlier rather than the
+effect. Commit `fb3799e`'s message is wrong on this point and is corrected by
+the commit that added this section — the git history keeps both, deliberately.
 
-Gap 373.4 bb/100 = **8.8 SE**, a **2.94x** reduction. At 192.3 the history arm
-is by a wide margin the least exploitable agent measured in this project —
-heuristic 1019.7, shipped PPO 670.6.
+**Where that leaves the block.** It is kept on the section 3.1 correctness
+argument alone (an average over aliased information states is an equilibrium of
+no game), which does not depend on either measurement. It has NOT earned a
+performance claim. Do not quote 192.3 or 2.9x anywhere.
 
-**The read:** this is the max-exploit / robustness tradeoff, not a regression.
-The block gives up 178 bb/100 against a weak scripted opponent to be 2.9x
-harder to counter, which is the direction NFSP is aimed at and exactly the
-signature the design note predicted in its section 8 before the run.
+### 0.5 The probe fails ~1/3 of the time and says "unexploitable"
 
-**Caveats.** Exploitability is a LOWER bound from a probe that tried a fixed
-amount, so 192.3 may partly mean "harder for a 120-iteration probe to crack"
-rather than "3x closer to equilibrium" — a longer probe would firm the absolute
-up without changing the ranking, since both arms got the same budget. This run
-also reads the shipped agent at 565.6 where the README says 670.6 ± 68.8
-(different probe seed, 5,000 decks vs 4,000, ~1.5 combined SE); not chased down.
+Both seed-23 probes finished with the exploiter below break-even:
 
-**Kept, and now on evidence rather than principle.** Do not claim it makes PPO
-win more — it does not.
+    seed 23, history:    curve -341 -> +27,  eval  +14.95 ± 7.15
+    seed 23, no history: curve -410 -> -91,  eval  -61.67 ± 41.91
 
-### 0.5 What is still open
+`ExploitReport.exploitability` clamps negatives to zero, so these printed as
+`exploitability lower bound: 14.9` and `0.0` — which read as *the least
+exploitable agents ever measured in this project*, against targets whose
+sibling seeds measured 553.2 and 609.7. Two of six probes failed this way.
 
-**One seed per arm, on both axes.** 2-3 seeds each (~3.5 h of training plus
-~1 h of probes) is the only way the −178 and the 373.4 become facts rather than
-anecdotes. Reproduce either column with:
+Same failure shape as the leak hunter under-reporting by 70x, one layer up: a
+broken instrument returning a small number that looks like good news.
 
-    POKR_RL_CKPT=models/rl_history/ppo_final.pt .venv/bin/python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast
-    POKR_RL_CKPT=models/rl_history/ppo_final.pt .venv/bin/python -m pokr.rl.exploit --target rl --iters 120
+**Fixed:** `ExploitReport` now has `converged`, and `format()` prints
+`PROBE FAILED ... bounds NOTHING` rather than a lower bound when the exploiter
+never cleared break-even. Tests in `tests/test_exploit.py`. **Check `converged`
+before believing any exploitability number, including future NFSP ones.**
 
-**README not updated.** Its Exploitability section still presents the shipped
-agent (670.6) as the least exploitable bot measured, which is true *of the
-shipped checkpoint* — `models/rl_history/` is gitignored and is not what
-`plugin.py` loads by default. Whether to promote the history arm to the shipped
-checkpoint, and rewrite that section around it, is a judgement call that was
-deliberately left open: it rests on one seed.
+**Not promoted, and README not rewritten.** The history arm does not have the
+evidence to become the shipped checkpoint; `plugin.py` still loads
+`models/rl/ppo_final.pt` and the README's Exploitability section stays as it
+is. Re-open this only with a probe budget large enough that failures are rare
+(more `--iters`), and more than three seeds.
 
 ### 0.6 Roadmap to NFSP implemented
 
