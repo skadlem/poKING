@@ -1,7 +1,9 @@
 # NFSP in pokr — design note
 
 **Date:** 2026-08-31
-**Status:** Design accepted; prerequisites in progress
+**Status:** Design accepted. Prerequisites 3.1 (betting history) and the Kuhn
+gate (section 6) are implemented and tested; 3.2-3.4 are not. No NFSP code
+exists yet. Section 10 records what has been measured.
 **Scope:** heads-up only. Everything below is a two-player zero-sum claim.
 
 ## 1. Why NFSP, and why here
@@ -305,7 +307,65 @@ Report `Pi` sampled, never `Q`, and never greedy.
   talking — nine discretized sizes — and more compute will not move it. The fix
   is the abstraction, or Deep CFR.
 
-## 10. References
+## 10. Measured so far
+
+### 10.1 The betting-history block did not help PPO
+
+Section 3.1 argued the history block on information-state grounds and noted it
+was "worth measuring against the current PPO agent on its own". It was, and it
+lost.
+
+Both arms trained with the shipped checkpoint's exact config (600 iters x 2000
+hands, seats 2,6, `--fast --reset-stacks`, seed 7, 8 workers), then scored on
+20k duplicate decks heads-up against the heuristic at 150 MC iterations:
+
+| arm | bb/100 vs heuristic |
+| --- | --- |
+| no history (obs 160, shipped checkpoint) | +639.51 +- 31.56 |
+| history (obs 176) | +461.76 +- 24.73 |
+
+-178 bb/100, resolved well outside the bars. One seed per arm, so one sample
+rather than a measurement.
+
+The likely mechanism is that 16 extra input dimensions, with an unchanged
+network, unchanged hyperparameters and the same 1.2M-hand budget, cost more in
+credit assignment than the aliasing fix pays back. Note also that "beats the
+heuristic harder" is the max-exploit metric, which is the opposite of what this
+block is for.
+
+**Not reverted.** The block is a correctness requirement for the method in this
+document -- an average over aliased information states is an equilibrium of no
+game -- not a performance optimization, and it is opt-out via `--no-history`.
+But nothing in this repo should claim it helps PPO.
+
+**Ruled out:** the history arm ends training at entropy 0.188 and PFR 0.0%,
+which resembles the entropy collapse recorded in HANDOFF section 7c. It is not
+one. The shipped arm ends at 0.220 / 1.7%, and in both logs the low-entropy
+lines are the 6-max iterations while the heads-up lines sit at 0.6-0.7. It is a
+table-size artifact of the per-iteration statistics.
+
+**Open.** The decisive measurement is exploitability, not win rate:
+
+    POKR_RL_CKPT=models/rl_history/ppo_final.pt python -m pokr.rl.exploit --target rl --iters 120
+
+against the shipped agent's 670.6 +- 68.8. Less exploitable while winning less
+is the signature this document predicts, and would make the block's case. More
+exploitable means the sixteen dimensions should be reconsidered before NFSP is
+built on them.
+
+### 10.2 The Kuhn harness certifies itself
+
+`pokr/rl/kuhn.py`, `tests/test_kuhn.py` (39 tests):
+
+| profile | exploitability | value to player 0 |
+| --- | --- | --- |
+| `nash(alpha)`, alpha in {0, 1/6, 1/3} | < 1e-17 | -1/18 exactly |
+| `uniform()` | 11/24 | +1/8 |
+
+The episode generator is pinned against the analytic tree walk over 40k hands,
+so a learner cannot train on one game and be scored on another.
+
+## 11. References
 
 - Heinrich & Silver, *Deep Reinforcement Learning from Self-Play in
   Imperfect-Information Games*, arXiv:1603.01121

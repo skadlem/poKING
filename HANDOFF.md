@@ -1,8 +1,172 @@
-# Handoff — pokr Poker Bot (session 2026-08-08)
+# Handoff — pokr Poker Bot
 
 **Repo:** https://github.com/skadlem/poKING (public)
-**Branch:** everything merged to `main` (PR #1 merged + one cherry-pick)
-**Date:** 2026-08-08
+**Latest session:** 2026-08-31 (section 0 below). Sections 1-8 are the
+2026-08-08 handoff and are still accurate except where section 0 says
+otherwise.
+
+---
+
+## 0. Session 2026-08-31 — NFSP prerequisites
+
+**Branch:** `feat/nfsp-prereqs`, 3 commits, **NOT pushed**, working tree clean.
+Branched off `main` at `170c46c`.
+
+    d78a8af feat(rl): Kuhn poker harness with exact exploitability
+    5917f88 feat(rl): encode betting history, so the observation is an information state
+    3053711 docs: design note for NFSP, and why it fits this engine
+
+Full suite: **291 passed** (was 250). Tests take ~1 min idle, ~3.5 min if a
+training or duplicate run is competing for CPU.
+
+### 0.1 What this session was
+
+Research + design for NFSP, then the two prerequisites that do not depend on
+any NFSP code existing. **The design note is `docs/design/nfsp.md` and it is
+the document to read first** — this section is only what happened, not why.
+
+Headline of the design note: NFSP is the right *next* algorithm here not
+because it beats Deep CFR (it does not — lower sample efficiency, higher
+exploitability in the literature) but because **it needs no engine changes**.
+It only plays hands front to back, which `bench.play_session` already does.
+Deep CFR needs tree traversal and `PokerGame.play_hand` is a straight-line
+call with no step interface, no cloning and no undo.
+
+### 0.2 Betting-history encoding (`5917f88`)
+
+`encode_obs` never touched `state.action_history`, so the observation was a
+snapshot of chip positions only. Two different preflop lines that arrive at the
+same chip position encoded **byte-identically** — heads-up, "SB limps, BB
+raises to 6, SB calls" versus "SB raises to 6, BB calls". Who raised preflop
+was absent. `test_two_preflop_lines_alias_in_the_old_layout_and_separate_in_the_new`
+asserts the aliasing rather than describing it.
+
+Added 16 dims: preflop aggressor + current-street aggressor (one-hot over
+relative seat, last slot = nobody), plus street and preflop raise counts capped
+at 4. OBS_DIM 160 -> 176.
+
+**The layout contract, which matters for everything downstream:** the block is
+appended LAST, so `obs[:OBS_DIM_V1]` is byte-identical to the old layout and
+`models/rl/ppo_final.pt` (and every README number) still runs. `RLStrategy`
+infers the layout from `net.obs_dim` rather than a flag — the layout is part of
+a checkpoint's contract and obs_dim already records it. An obs_dim matching
+neither layout raises at construction. **Do not insert new observation fields
+anywhere but the end**, or pre-history checkpoints die.
+
+`train_rl.py --no-history` trains the old layout; the banner prints which.
+
+### 0.3 Kuhn harness (`d78a8af`)
+
+`pokr/rl/kuhn.py` — the gate an equilibrium algorithm passes before it sees
+NLHE. Best response is an exhaustive max over 2**6 pure strategies per player,
+so `exploitability()` is **exact**: not a bound, not an estimate, nothing to
+converge. Self-validating — the Nash family is at machine epsilon for every
+alpha in [0, 1/3], game value -1/18, uniform play 11/24 exploitable.
+
+No torch, no numpy, no rng in the pure functions.
+
+Rationale (design note section 6): `pokr/rl/exploit.py` grades a bot by
+training a PPO best response, which is a lower bound off a noisy run. Fine for
+ranking bots, useless for deciding whether a reservoir sampler has an
+off-by-one. This project's headline finding is that its own exploitability
+proxy under-reported by ~70x; running an unvalidated equilibrium algorithm
+against an approximate metric is that same trap.
+
+### 0.4 A/B of the encoding — the history block LOST
+
+Both arms trained with the shipped checkpoint's exact config
+(`--iters 600 --hands-per-iter 2000 --seats 2,6 --fast --reset-stacks
+--workers 8 --seed 7`), 35.2 min each at ~2-4k h/s. Scored on 20k duplicate
+decks heads-up vs the heuristic at 150 MC iters.
+
+| arm | checkpoint | bb/100 vs heuristic |
+|---|---|---|
+| no history (obs 160) | `models/rl/ppo_final.pt` (shipped) | **+639.51 ± 31.56** |
+| history (obs 176) | `models/rl_history/ppo_final.pt` | **+461.76 ± 24.73** |
+
+−178 bb/100, resolved well outside the bars. **One seed per arm — this is one
+sample, not a measurement.**
+
+Two things a new session must not re-derive wrong:
+
+- **There was no entropy collapse in the history arm.** It ends at ent 0.188 /
+  PFR 0.0%, which looks like the failure mode section 7c warns about — but the
+  shipped arm ends at ent 0.220 / PFR 1.7%. In BOTH logs the low-entropy lines
+  are the **6-max** iterations and the heads-up-vs-tag lines sit at 0.6-0.7.
+  It is a table-size artifact of per-iteration stats. Whole-run entropy at it
+  500 is 0.578 (shipped) vs 0.367 (history) — mildly lower, a hint, not an
+  explanation.
+- **Arm A reproduces the shipped agent at +639.5 where the README says
+  +604.0 ± 36.1.** Same checkpoint, so this is an eval-seed difference and it
+  also confirms the 160-dim checkpoint still plays correctly through the new
+  `encode.py`. The ~35 bb/100 gap was NOT chased down.
+
+**The read, honestly:** 16 extra input dims with an unchanged net, unchanged
+hyperparameters and the same 1.2M-hand budget cost more in credit assignment
+than the aliasing fix paid back *on this metric*. And "beats the heuristic
+harder" is the max-exploit metric — the opposite of what the block is for.
+
+**Not reverted, deliberately.** The block is a correctness requirement for NFSP
+(an average over aliased information states is an equilibrium of no game), not
+a performance optimization, and it is opt-out via `--no-history`. But do not
+claim it helps PPO — on the evidence it does not.
+
+### 0.5 The open question, and the command that answers it
+
+Exploitability, not win rate, is the metric that decides whether the block
+earns its place. ~25 min for both arms:
+
+    POKR_RL_CKPT=models/rl/ppo_final.pt         .venv/bin/python -m pokr.rl.exploit --target rl --iters 120
+    POKR_RL_CKPT=models/rl_history/ppo_final.pt .venv/bin/python -m pokr.rl.exploit --target rl --iters 120
+
+Shipped agent's reference number is **670.6 ± 68.8**. If the history arm is
+*less* exploitable while winning less, that is exactly the signature the design
+note predicts and it makes the block's case. If it is more exploitable, the
+block is not pulling its weight and the 16 dims should be reconsidered before
+NFSP is built on them.
+
+Also unresolved: **one seed per arm.** 2-3 seeds per arm would cost ~3.5 h and
+is the only way the −178 becomes a fact rather than an anecdote.
+
+### 0.6 Roadmap to NFSP implemented
+
+Strict order. Nothing below step 6 starts until step 6 is green.
+
+| # | Work | Size |
+|---|---|---|
+| 1 | Deterministic equity: seed `RLStrategy._equity` from `hash(key)` not `self.rng`, so one info state maps to one observation (design note 3.3) | ~10 lines + test |
+| 2 | Register `"nfsp"` in `plugin.py` with `greedy=False` — the argmax of an approximate equilibrium is maximally exploitable (3.4) | ~15 lines |
+| 3 | Opponent-model features off (3.2) | already there: `model_opponents=False` zeroes the block |
+| 4 | `pokr/rl/memory.py` — `ReservoirBuffer` + exponentially-averaged variant. Uniformity over a long stream is assertable | small |
+| 5 | `AvgPolicyNet` + masked cross-entropy trainer, in a NEW module (leave `PolicyValueNet` alone; PPO depends on it) | small |
+| 6 | **GATE:** FSP on Kuhn, tabular then neural, asserted against `kuhn.exploitability() < 0.05` | the real work |
+| 7 | `pokr/rl/nfsp.py` — `NFSPStrategy`, sigma coin-flip per hand in `on_hand_end`, `br_mode` on `Episode` | medium |
+| 8 | `rollout.py` — both seats recording; build agent 1 outside, seat it with `lambda rng: agent1` | small |
+| 9 | `train_nfsp.py` — round loop, **heads-up only** (NFSP is a 2p0s guarantee) | medium |
+| 10 | Measure: `exploit.py --target nfsp` against the shipped 670.6 | — |
+
+Ladder choice (design note section 4): **ladder B first** — fictitious self-play
+with a PPO best response, reusing `exploit.py:best_response` as the oracle. No
+DQN, ~150 lines, code that is already debugged. Ladder A (faithful DQN +
+reservoir NFSP) only if B's exploitability curve flattens too high.
+
+Success condition, stated before the run: `exploit.py --target nfsp` well below
+670.6. It is **not** beating the PPO agent head-to-head — an equilibrium
+approximator should lose to a max-exploit agent against weak opposition and win
+less against the calling station and the maniac.
+
+### 0.7 Gotchas found this session
+
+- **`models/` is gitignored.** `models/rl_history/` (the history arm, 11 MB)
+  exists only on this machine. Re-training it is 35 min.
+- Two `tests/test_league.py` tests build a real `RLStrategy` from a stub net and
+  needed a real `obs_dim`; the other seven stubs never encode and were left at
+  `obs_dim=16`.
+- Do not wait on a background job with `until ! pgrep -f "pokr.duplicate"` —
+  the waiter's own command line contains the pattern, so it matches itself and
+  never exits.
+- The venv is `.venv/` and is NOT on the default `python3`. Use
+  `.venv/bin/python`.
 
 ---
 
