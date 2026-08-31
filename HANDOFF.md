@@ -169,7 +169,7 @@ Strict order. Nothing below step 6 starts until step 6 is green.
 | 1 | ~~Deterministic equity~~ **DONE `44238bf`**: `RLStrategy._equity` seeds `random.Random(hash(key))` per info state; key is ints-only (asserted stable across worker processes). Re-measured the shipped agent on this code: duplicate +633.8 ±31.7 (published +604 ±36) and probe 668.7 ±56.4 (published 670.6) — inside the old bars, no re-anchor needed. Suite 296 -> 300. | ~10 lines + test |
 | 2 | Register `"nfsp"` in `plugin.py` with `greedy=False` — the argmax of an approximate equilibrium is maximally exploitable (3.4). Needs `NFSPStrategy` (step 7) to exist; do it there, not as a stub | ~15 lines |
 | 3 | Opponent-model features off (3.2) | already there: `model_opponents=False` zeroes the block |
-| 4 | `pokr/rl/memory.py` — `ReservoirBuffer` + exponentially-averaged variant. Uniformity over a long stream is assertable | small |
+| 4 | ~~`pokr/rl/memory.py`~~ **DONE `06f753b`**: `ReservoirBuffer` (Algorithm R) + `ExponentialReservoirBuffer` (0.25 floor), torch/numpy-free. Uniformity asserted via chi-square (calibrated null ~174±19 over 40 seeds; a 5-sigma per-position band was tried, and produced a false failure at position 50 on the unbiased sampler — do not reintroduce it). Exact inclusion product for the floored variant is in the test and brute-force verified | small |
 | 5 | `AvgPolicyNet` + masked cross-entropy trainer, in a NEW module (leave `PolicyValueNet` alone; PPO depends on it) | small |
 | 6 | **GATE:** FSP on Kuhn, tabular then neural, asserted against `kuhn.exploitability() < 0.05` | the real work |
 | 7 | `pokr/rl/nfsp.py` — `NFSPStrategy`, sigma coin-flip per hand in `on_hand_end`, `br_mode` on `Episode` | medium |
