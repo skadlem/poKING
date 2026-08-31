@@ -7,6 +7,7 @@ silently becomes a fold and quietly poisons the training signal. These tests
 therefore assert legality directly at each decision point AND assert that a
 long session produces no sandbox warning on stderr.
 """
+import os
 import pathlib
 import random
 
@@ -456,3 +457,74 @@ def test_clone_keeps_the_layout():
 
     agent = RLStrategy(net=PolicyValueNet(obs_dim=OBS_DIM_V1))
     assert agent.clone(greedy=True).history is False
+
+
+# -- deterministic equity (design note 3.3) -------------------------------
+
+
+def test_equity_is_a_function_of_the_info_state_not_the_rng_stream():
+    """Two agents with different RNG seeds must encode the same hole+board+
+    count identically. Before the fix both drew from their own self.rng, so
+    one info state mapped to many observations and the average policy
+    smeared across the difference."""
+    agents = [RLStrategy(rng=random.Random(s), mc_iters=16)
+              for s in (0, 1234, 99)]
+    st = make_state(hole="Ah Kd", board="2c 7s Ts")
+    vals = [a._equity(st, 0, 2) for a in agents]
+    assert vals[0] is not None
+    assert all(v == vals[0] for v in vals[1:]), vals
+
+
+def test_equity_survives_the_per_hand_cache_clear():
+    """The cache clears in on_hand_end; the value must not wander between
+    hands the way a per-stream draw made it wander."""
+    agent = RLStrategy(rng=random.Random(7), mc_iters=16)
+    st = make_state(hole="9c 9h", board="")
+    first = agent._equity(st, 0, 3)
+    agent._equity_cache.clear()          # what every hand boundary does
+    assert agent._equity(st, 0, 3) == first
+
+
+def test_equity_seeds_differ_across_info_states():
+    """Determinism must not collapse into one constant: different keys need
+    different RNGs. (Equal MC draws are possible; equal constants are not.)"""
+    agent = RLStrategy(rng=random.Random(0), mc_iters=64)
+    a = agent._equity(make_state(hole="Ah Kh", board=""), 0, 1)
+    b = agent._equity(make_state(hole="2c 7s", board=""), 0, 1)
+    assert a is not None and b is not None
+    assert a > 0.5 > b
+
+
+def test_equity_key_hashes_identically_in_every_worker_process():
+    """Rollouts run in --workers subprocesses. PYTHONHASHSEED randomises
+    str/bytes hashing per process, so a key containing a str would silently
+    give each worker a different equity for the same state. The key is
+    ints-only; prove it survives a fresh interpreter with another seed."""
+    import subprocess
+    import sys
+
+    from pokr.rl.agent import _equity_key
+    key = _equity_key(hs("Ah Kd"), hs("2c 7s Ts"), 2)
+
+    def leaves(o):
+        if isinstance(o, tuple):
+            return [x for sub in o for x in leaves(sub)]
+        return [o]
+
+    assert all(type(x) is int for x in leaves(key)), \
+        "key must be ints-only for cross-process hash stability"
+    code = ("import hashlib;"
+            "from pokr.rl.agent import _equity_key;"
+            "from pokr.cards import card_from_str;"
+            "k=_equity_key([card_from_str('Ah'),card_from_str('Kd')],"
+            "[card_from_str('2c'),card_from_str('7s'),card_from_str('Ts')],2);"
+            "print(hashlib.sha256(repr(hash(k)).encode()).hexdigest()[:16])")
+    root = pathlib.Path(__file__).resolve().parent.parent
+    digests = set()
+    for seed in ("0", "1", "42"):
+        out = subprocess.run(
+            [sys.executable, "-P", "-c", code], capture_output=True,
+            text=True, check=True, cwd=root,
+            env={**os.environ, "PYTHONHASHSEED": seed})
+        digests.add(out.stdout.strip())
+    assert len(digests) == 1, f"hash(key) varies across processes: {digests}"

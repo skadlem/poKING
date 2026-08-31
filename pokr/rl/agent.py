@@ -88,6 +88,16 @@ def _infer_history(net: PolicyValueNet | None, history: bool | None) -> bool:
         f"(current {OBS_DIM}, pre-history {OBS_DIM_V1})")
 
 
+def _equity_key(hole, community, num_opponents: int) -> tuple:
+    """Identity of an equity observation: hero's private cards + public board +
+    live opponent count -- exactly the info state the feature is legitimately a
+    function of (design note 3.3). Must stay ints-only: hash() randomises
+    str/bytes per process via PYTHONHASHSEED, and rollouts run in workers."""
+    return (tuple(sorted((c.rank, c.suit) for c in hole)),
+            tuple(sorted((c.rank, c.suit) for c in community)),
+            num_opponents)
+
+
 class RLStrategy(BaseStrategy):
     """Torch policy playing inside the pokr engine.
 
@@ -178,12 +188,19 @@ class RLStrategy(BaseStrategy):
                           summary, history=self.history)
 
     def _equity(self, state, player_id: int, num_opponents: int) -> float | None:
+        """Monte Carlo equity, seeded so one info state maps to one observation.
+
+        The RNG is a fresh random.Random(hash(key)), NOT the agent's stream:
+        drawing from self.rng made the same hole+board+count encode differently
+        every time it was seen (design note 3.3), so the average policy smeared
+        across aliased observations. hash() over a tuple of ints is stable
+        across processes (PYTHONHASHSEED only randomises str/bytes), so worker
+        rollouts agree with the main process on every equity value.
+        """
         if self.mc_iters <= 0 or num_opponents <= 0:
             return None
         me = state.players[player_id]
-        key = (tuple(sorted((c.rank, c.suit) for c in me.hole)),
-               tuple(sorted((c.rank, c.suit) for c in state.community)),
-               num_opponents)
+        key = _equity_key(me.hole, state.community, num_opponents)
         hit = self._equity_cache.get(key)
         if hit is None:
             equity_fn = monte_carlo_equity
@@ -191,7 +208,7 @@ class RLStrategy(BaseStrategy):
                 from .._fastcards import monte_carlo_equity_fast
                 equity_fn = monte_carlo_equity_fast
             hit = equity_fn(me.hole, state.community, num_opponents,
-                            self.mc_iters, self.rng)
+                            self.mc_iters, random.Random(hash(key)))
             self._equity_cache[key] = hit
         return hit
 
