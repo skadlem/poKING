@@ -197,6 +197,67 @@ def test_record_episode_fans_steps_out_with_the_flag():
     assert all(not r[3] for r in agent.buffer.contents()[-T:])
 
 
+def test_record_episode_guards_the_observation_layout():
+    """PPO checkpoints exist in 160 and 176 widths; a mismatched harvest
+    must die here, not inside torch three frames deep after an hour of
+    collecting."""
+    agent = make_agent(record=False)                 # Pi at OBS_DIM (176)
+    T = 3
+    masks = np.zeros((T, NUM_ACTIONS), dtype=bool)
+    masks[:, 0] = True
+    wrong = Episode(obs=np.zeros((T, OBS_DIM - 16), np.float32), masks=masks,
+                    actions=np.zeros(T, dtype=np.int64),
+                    logps=np.zeros(T, np.float32), values=np.zeros(T, np.float32),
+                    reward=0.0)
+    with pytest.raises(ValueError, match="layout"):
+        agent.record_episode(wrong)
+    assert agent.buffer.seen == 0                    # nothing half-recorded
+
+
+# -- step 8: one instance, both seats -------------------------------------------
+
+
+def test_one_instance_seated_twice_records_both_seats():
+    """Ladder B shares one Pi across both heads-up seats (position is in the
+    observation, one pair of nets). A flat per-hand step buffer — the naive
+    shape — flushes seat 0's rows, then seat 1's on_hand_end sees an empty
+    list and those decisions vanish. Per-seat recording keeps them: rows
+    must match the engine's own decision count for the session, where a
+    dropped seat would halve it."""
+    from pokr.engine import PokerGame
+
+    agent = make_agent()
+    rng = random.Random(5)
+    decisions = 0
+    for h in range(24):                              # agent IS both seats
+        game = PokerGame([agent, agent], [200, 200], rng=rng,
+                         initial_dealer=h % 2)
+        res = game.play_hand()
+        decisions += len(res.actions)
+    assert agent.buffer.seen == decisions, (
+        f"{agent.buffer.seen} rows vs {decisions} engine decisions — a seat "
+        "is leaking (flat-buffer interleave or flush-order bug)")
+    assert agent._steps == {} and agent._hand_is_br == {}, "steps left behind"
+
+
+def test_record_episode_rejects_a_foreign_observation_layout():
+    """PPO checkpoints exist at 160 (pre-history) and 176 widths; feeding
+    160-wide rows to a 176-wide Pi would crash inside fit with a shape
+    error hundreds of hands in. Fail on row one."""
+    agent = make_agent(record=False)                  # Pi at OBS_DIM=176
+    T = 3
+    masks = np.zeros((T, NUM_ACTIONS), dtype=bool)
+    masks[:, 0] = True
+    foreign = Episode(
+        obs=np.zeros((T, OBS_DIM - 16), dtype=np.float32),   # a 160-row
+        masks=masks, actions=np.zeros(T, dtype=np.int64),
+        logps=np.zeros(T, np.float32), values=np.zeros(T, np.float32),
+        reward=0.0)
+    with pytest.raises(ValueError, match="layout"):
+        agent.record_episode(foreign)
+    assert agent.buffer.seen == 0, "rejecting must not half-record"
+
+
 def test_fit_learns_the_behaviours_frequencies():
     """End-to-end learner check without an engine: reservoir holds 4000
     rows from one state whose behaviour bets 70%; after fit, Pi's
@@ -220,12 +281,19 @@ def test_fit_learns_the_behaviours_frequencies():
 
 
 def test_auto_fit_gates_on_hand_count_and_row_count():
-    agent = make_agent(fit_every=5)
+    """fit_every counts hands; batch_size counts rows. Both gates are real:
+    against these scripted bots a heads-up hand averages barely over one
+    agent decision, so a 5-hand threshold can legitimately see <16 rows —
+    the row gate must hold the fit back until then."""
+    agent = make_agent(fit_every=5, batch_size=16)
     play(agent, 4)
     assert agent.last_fit_loss is None              # 4 hands < 5
-    play(agent, 1)
+    play(agent, 1)                                  # 5th hand...
+    assert agent.buffer.seen < 16                   # ...but still too few rows
+    assert agent.last_fit_loss is None, "fitted with one batch's worth of noise"
+    while agent.last_fit_loss is None:              # rows accrue ~1.2/hand
+        play(agent, 5)
     assert agent.buffer.seen >= 16
-    assert agent.last_fit_loss is not None, "fit threshold reached but no fit"
     twin = agent.clone_for_evaluation()
     assert twin.config.fit_every == 0, \
         "an eval twin that refits mid-scoring invalidates its own numbers"

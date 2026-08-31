@@ -128,8 +128,14 @@ class NFSPStrategy(BaseStrategy):
         self.buffer = buffer if buffer is not None else \
             ReservoirBuffer(cfg.capacity, self.rng)
         self.record = record
-        self._steps: list[tuple[np.ndarray, np.ndarray, int]] = []
-        self._hand_is_br: bool | None = None    # None = flip on first decision
+        # steps keyed by seat: the engine calls decide() for BOTH players of
+        # a heads-up session when the same instance is seated twice (the
+        # ladder design shares one pair of nets across seats — position is
+        # in the observation), and on_hand_end fires once per seat. A flat
+        # list would flush seat 1's steps into seat 0's hand and drop them
+        # at the second flush.
+        self._steps: dict[int, list[tuple[np.ndarray, np.ndarray, int]]] = {}
+        self._hand_is_br: dict[int, bool | None] = {}
         self._flips = 0
         self._hands_since_fit = 0
         self.last_fit_loss: float | None = None
@@ -145,24 +151,24 @@ class NFSPStrategy(BaseStrategy):
     def decide(self, state, player_id: int) -> Action:
         obs = self._view.observe(state, player_id)
         mask = action_mask(state, player_id)
-        if self._hand_is_br is None:               # first decision of a hand:
-            self._hand_is_br = self._play_br_this_hand()   # flip sigma ONCE
-            self._flips += 1                       # per hand (design note 2)
-        if self._hand_is_br:
+        if self._hand_is_br.get(player_id) is None:   # first decision this
+            self._hand_is_br[player_id] = self._play_br_this_hand()   # hand,
+            self._flips += 1                          # per player (note 2)
+        if self._hand_is_br[player_id]:
             idx = self._epsilon_greedy(state, player_id, mask)
         else:
             idx, _logp = self.net.act(obs, mask)     # sampled; never argmax
         if self.record:
-            self._steps.append((obs, mask, idx))
+            self._steps.setdefault(player_id, []).append((obs, mask, idx))
         return decode(state, player_id, idx)
 
     def on_hand_end(self, result, my_seat: int) -> None:
-        if self.record and self._steps:
-            flag = bool(self._hand_is_br)
-            for obs, mask, idx in self._steps:
+        steps = self._steps.pop(my_seat, [])
+        if self.record and steps:
+            flag = bool(self._hand_is_br.get(my_seat))
+            for obs, mask, idx in steps:
                 self.buffer.add((obs, mask, idx, flag))
-        self._steps.clear()
-        self._hand_is_br = None
+        self._hand_is_br.pop(my_seat, None)
         self._view._equity_cache.clear()             # hand boundary, as in PPO
         self._hands_since_fit += 1
         if (self.config.fit_every
@@ -190,8 +196,8 @@ class NFSPStrategy(BaseStrategy):
         twin.net = self.net
         twin.buffer = self.buffer
         twin.record = False
-        twin._steps = []
-        twin._hand_is_br = None
+        twin._steps = {}
+        twin._hand_is_br = {}
         twin._flips = self._flips
         twin._hands_since_fit = self._hands_since_fit
         twin.last_fit_loss = self.last_fit_loss
@@ -201,9 +207,20 @@ class NFSPStrategy(BaseStrategy):
     # -- the learners' seams ------------------------------------------------
 
     def record_episode(self, ep: Episode, br_mode: bool = True) -> None:
-        """Ladder B: the outer loop harvested a PPO best response's hand;
-        its steps are behaviour rows M_SL exists to hold. The reservoir's
-        unit is the step, so one call fans the episode out."""
+        """The ladder-B seam: an oracle PPO best response's hand enters as
+        behaviour rows. The reservoir's unit is the step, so one call fans
+        the episode out.
+
+        The obs-dim guard is load-bearing: PPO checkpoints exist in two
+        layouts (160 pre-history, 176 with it — see _infer_history) and an
+        un-asserted mismatch would make `fit` crash in torch with a shape
+        error three frames deep, mid-campaign, after hours of harvesting."""
+        if len(ep.actions) and ep.obs.shape[1] != self.net.obs_dim:
+            raise ValueError(
+                f"episode obs_dim {ep.obs.shape[1]} != Pi net obs_dim "
+                f"{self.net.obs_dim}: the BR and Pi must encode the same "
+                "layout (train the BR with --no-history off, or Pi at the "
+                "BR's width)")
         for t in range(len(ep.actions)):
             self.buffer.add((ep.obs[t], ep.masks[t], int(ep.actions[t]), br_mode))
 
