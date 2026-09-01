@@ -1,10 +1,36 @@
 # pokr
 
 [![tests](https://github.com/skadlem/poKING/actions/workflows/tests.yml/badge.svg)](https://github.com/skadlem/poKING/actions/workflows/tests.yml)
+[![writeup: the 2,800x variance bug](https://img.shields.io/badge/writeup-the_2%2C800%C3%97_variance_bug-d8a24a)](https://skadlem.github.io/poKING/variance-bug.html)
 
-A 6-max No-Limit Hold'em engine, a hand-tuned bot, and a PPO agent trained
-inside that engine — built mainly as an exercise in measuring a strategy's
+A 6-max No-Limit Hold'em engine, a hand-tuned bot, a PPO agent trained inside
+that engine, and an NFSP (average-policy) pipeline validated against exact
+exploitability on Kuhn — built mainly as an exercise in measuring a strategy's
 edge honestly under very heavy noise.
+
+## The numbers (all reproducible, all seeded)
+
+| claim | measurement | how |
+|---|---|---|
+| PPO agent beats the heuristic | **+604.0 ± 36.1 bb/100** heads-up, 30k duplicate hands | `python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast` |
+| least exploitable bot measured | **670.6 ± 68.8** bb/100 (heuristic: 1019.7) | `python -m pokr.rl.exploit --target rl --iters 200` |
+| 4.4x the heuristic's edge vs a third-party trained DQN | **+979.5 ± 97.9** (heuristic: +221.6) | duplicate vs the RLCard DQN, 3000 decks |
+| profitable vs an external engine's bots | +5.1 / +40.5 / +49.9 bb/100 (Honest/Fish/Random, heads-up) | `python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7` |
+| NFSP average policy, 30-round ladder-B campaign | 737.5 ± 86.0 bb/100 exploitable (seed 7) — the honest result: **not yet competitive** with the PPO's 670.6 | `python -m pokr.rl.exploit --target nfsp --iters 120` |
+
+**What it is not.** 670 bb/100 exploitable is catastrophic in absolute terms —
+a best response wins ~6.7 big blinds per hand, taking a 100bb stack every ~15
+hands. Nothing here is close to equilibrium; the scripted opponents are weak,
+and the honest summary is "a good exploiter of weak static opponents, measured
+carefully." Closing that gap is what the NFSP workstream (below) is for.
+
+**Claim discipline.** Every headline number here is seed-replicated or
+withdrawn. When a result failed to replicate across seeds, the README says so
+and the number is gone — see the retracted "2.9x less exploitable" note in
+`HANDOFF.md` 0.4. This repo treats a measurement bug as more interesting than
+a win: [The 2,800× Variance Bug](https://skadlem.github.io/poKING/variance-bug.html)
+is the full story of a rebuy rule that inflated variance ~2,800x and left two
+matchups statistically unresolved for the project's entire history.
 
 **What this project is really about.** Poker win rates are dominated by
 variance, and most of the interesting work here turned out to be measurement
@@ -31,20 +57,13 @@ rather than modelling:
   depth fix above. The reasoning and the dead ends are recorded in the
   modules so they are not rediscovered.
 
-**The result.** A PPO agent (110k parameters, ~15 min of CPU training) that
-beats the hand-tuned heuristic by **+604 ± 36 bb/100** heads-up over 30k
-duplicate-deck hands, beats RLCard's DQN by **+979 ± 98** where the heuristic
-manages +222, and is the least exploitable of the four bots measured
-(**670.6 ± 68.8** against the heuristic's 1,019.7).
+**The result.** A PPO agent (110k parameters, ~15 min of CPU training) and a
+30-round NFSP campaign against it — both in the table above, both reproducible
+with the commands there.
 
-**What it is not.** 670 bb/100 exploitable is catastrophic in absolute terms —
-a best response wins ~6.7 big blinds per hand, taking a 100bb stack every ~15
-hands. Nothing here is close to equilibrium; the scripted opponents are weak,
-and the honest summary is "a good exploiter of weak static opponents, measured
-carefully." Approximating equilibrium needs Deep CFR or NFSP, which is not
-implemented.
-
-Spec: `docs/superpowers/specs/2026-08-06-poker-bot-design.md`.
+Spec: `docs/superpowers/specs/2026-08-06-poker-bot-design.md`. The NFSP
+design note is `docs/design/nfsp.md`; session history and the roadmap state
+are in `HANDOFF.md`.
 
 ## Benchmark results
 
@@ -94,7 +113,7 @@ heads-up excluded — it regressed PyPokerEngine's HonestPlayer matchup there).
 ## Install
 
     pip install -r requirements.txt
-    pytest -q                              # 243 tests, ~1 min
+    pytest -q                              # 358 tests, ~1.5 min
 
 Torch is only needed for the PPO agent — the engine, the heuristic bot and all
 benchmarks import it lazily and run without it. For a CPU-only build (the
@@ -424,6 +443,47 @@ Caveats, in order of how much they matter:
 - Beating the heuristic head-to-head is not the same as playing well. Neither
   has been tested against a strong NLH solver.
 
+### NFSP: the average-policy pipeline (and its honest negative result)
+
+Every bot above is ~670-1020 bb/100 exploitable, which is far from
+equilibrium. `pokr/rl/` grew a second algorithm family to attack that axis
+directly: NFSP, an average-policy method whose convergence guarantee is
+provable — so the pipeline was built in strict order with a validation gate
+that cannot lie:
+
+1. **Kuhn gate (`pokr/rl/fsp.py`)** — the same reservoir-sampling + masked-CE
+   fitting that NFSP uses, validated against Kuhn poker's *exact*
+   exploitability (a maximum over 64 pure strategies; ground truth, not an
+   estimate). The neural path must drive exploitability below 0.05 — and does,
+   on five seeds.
+2. **A second diagnostic earned its keep**: the first NLHE campaign
+   (30 rounds, ~2.4M hands) trained a policy measurably indistinguishable from
+   a coin flip over its legal-action mask — CE loss 1.641 vs the analytic
+   uniform-mask floor 1.712 — while every component test AND the Kuhn gate
+   stayed green. The gate validated the algorithm; the bug was wiring: a
+   uniform reservoir had silently replaced the linearly-weighted one the gate
+   validated, so each round's random-init restart of the best-response oracle
+   was folded into the average forever. Fixed with a weighted reservoir,
+   round-level weights, and 75% per-round burn-in (post-mortem: `HANDOFF.md`
+   0.6 step 10; lesson: *a green component gate does not validate
+   integration*).
+3. **Campaign #2, measured end to end** (`train_nfsp.py`, 30 rounds x 40
+   iterations): the loop is healthy — per-round best-response curves fall from
+   +1696 to negative by round 18, fit loss holds ~0.4 nats under the
+   coin-flip floor. The converged probe says Pi_last is **737.5 ± 86.0**
+   bb/100 exploitable (seed 7; 1011.1 ± 86.5 on seed 11) versus the shipped
+   PPO's 670.6 — and it loses duplicate heads-up to the heuristic by −285.9 ±
+   34.7. **The success condition ("well below 670.6") failed honestly.** At 30
+   fictitious-play moves the average is still dominated by weak early best
+   responses; NFSP's ceiling only rises with rounds, and 30 is a fraction of
+   what the method needs. The checkpoints and logs are kept locally as
+   negative evidence.
+
+What this buys the project: an equilibrium-approximation path with a validated
+core, a diagnostic (loss-vs-entropy-floor) that turns "converged" claims into
+arithmetic, and a number that says how many more rounds this scale of compute
+buys — which is exactly the question the next campaign runs against.
+
 ## Module map
 
 - `pokr/cards.py` — Card, Deck, hand evaluator, Monte Carlo equity
@@ -446,8 +506,14 @@ Caveats, in order of how much they matter:
 - `pokr/rl/league.py` — frozen past selves used as training opponents
 - `pokr/rl/rollout.py` — multiprocess rollout collection
 - `pokr/rl/exploit.py` — best-response probe (exploitability lower bound)
+- `pokr/rl/kuhn.py` — exact-exploitability Kuhn harness (the NFSP gate)
+- `pokr/rl/fsp.py` — WeightedReservoir (A-Res) + the Kuhn gate itself
+- `pokr/rl/memory.py` — uniform/floored reservoirs
+- `pokr/rl/avg_policy.py` — the average-policy net (masked-CE fit)
+- `pokr/rl/nfsp.py` — NFSPStrategy (Pi as an engine citizen)
 - `pokr/rl/plugin.py` — connector plugin for a trained checkpoint
-- `train_rl.py` — training loop (rollouts via the benchmark harness)
+- `train_rl.py` — PPO training loop (rollouts via the benchmark harness)
+- `train_nfsp.py` — ladder-B NFSP outer loop (BR harvest -> average fit)
 
 ## Tests
 
