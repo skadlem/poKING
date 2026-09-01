@@ -26,6 +26,20 @@ under a seeded rng, so a failed run is reproducible line by line.
 from __future__ import annotations
 
 import random
+from typing import Protocol
+
+
+class ReplayBuffer(Protocol):
+    """What NFSPStrategy.fit / record_episode require of a buffer: the
+    (item, weight) add contract, the stream counters, and contents().
+    ReservoirBuffer satisfies it with weight pinned to 1.0 (uniform);
+    WeightedReservoir (fsp.py) satisfies it proportionally. Structural
+    typing keeps memory.py import-free of fsp.py, not a base-class lie."""
+
+    def add(self, item, weight: float = 1.0) -> None: ...
+    def contents(self) -> list: ...
+    @property
+    def seen(self) -> int: ...
 
 
 class ReservoirBuffer:
@@ -54,7 +68,12 @@ class ReservoirBuffer:
         """How many items the stream has delivered in total."""
         return self._seen
 
-    def add(self, item) -> None:
+    def add(self, item, weight: float = 1.0) -> None:
+        if weight != 1.0:
+            raise ValueError(
+                "ReservoirBuffer is uniform by contract; weighted inclusion "
+                "is WeightedReservoir (fsp.py) — silently ignoring a weight "
+                "here would fake the linear averaging")
         self._seen += 1
         if len(self._items) < self.capacity:
             self._items.append(item)

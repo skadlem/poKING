@@ -76,6 +76,10 @@ class WeightedReservoir:
         self._heap: list[tuple[float, int, object]] = []
         self._seq = 0
         self._seen = 0
+        # sum of weights ever added; compared against capacity by callers
+        # that must not overfill (A-Res inclusion is only proportional once
+        # the stream overflows the capacity — see class docstring).
+        self.weight_sum = 0.0
 
     def __len__(self) -> int:
         return len(self._heap)
@@ -88,6 +92,7 @@ class WeightedReservoir:
         if weight < 0:
             raise ValueError(f"negative weight {weight}")
         self._seen += 1
+        self.weight_sum += weight
         if weight == 0:
             return                                   # zero weight never enters
         u = self.rng.random()

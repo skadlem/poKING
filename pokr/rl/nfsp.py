@@ -58,7 +58,7 @@ from ..strategy import Action, BaseStrategy
 from .agent import Episode, RLStrategy, _equity_key
 from .avg_policy import AvgPolicyNet, fit_avg_policy
 from .encode import action_mask, decode
-from .memory import ReservoirBuffer
+from .memory import ReplayBuffer, ReservoirBuffer
 
 
 @dataclass
@@ -117,7 +117,7 @@ class NFSPStrategy(BaseStrategy):
                  model_opponents: bool = False,
                  record: bool = True,
                  q_table: dict | None = None,
-                 buffer: ReservoirBuffer | None = None) -> None:
+                 buffer: ReplayBuffer | None = None) -> None:
         cfg = config or NFSPConfig()
         if cfg.behaviour not in ("ppo", "epsilon"):
             raise ValueError(f"unknown behaviour {cfg.behaviour!r}; "
@@ -207,10 +207,16 @@ class NFSPStrategy(BaseStrategy):
 
     # -- the learners' seams ------------------------------------------------
 
-    def record_episode(self, ep: Episode, br_mode: bool = True) -> None:
+    def record_episode(self, ep: Episode, br_mode: bool = True,
+                       weight: float = 1.0) -> None:
         """The ladder-B seam: an oracle PPO best response's hand enters as
         behaviour rows. The reservoir's unit is the step, so one call fans
-        the episode out.
+        the episode out. `weight` is forwarded to the buffer: with the
+        trainer's WeightedReservoir it carries the global iteration index
+        (linear averaging, the structure the Kuhn gate validated); with the
+        plain uniform ReservoirBuffer any weight != 1.0 raises — that
+        combination is a silent-shape bug waiting to happen, and it bit
+        exactly that way in the first 30-round campaign.
 
         The obs-dim guard is load-bearing: PPO checkpoints exist in two
         layouts (160 pre-history, 176 with it — see _infer_history) and an
@@ -223,7 +229,8 @@ class NFSPStrategy(BaseStrategy):
                 "layout (train the BR with --no-history off, or Pi at the "
                 "BR's width)")
         for t in range(len(ep.actions)):
-            self.buffer.add((ep.obs[t], ep.masks[t], int(ep.actions[t]), br_mode))
+            self.buffer.add((ep.obs[t], ep.masks[t], int(ep.actions[t]),
+                             br_mode), weight)
 
     def fit(self, **overrides) -> float:
         """Supervised fit of Pi on the reservoir; returns the final epoch loss.

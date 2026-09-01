@@ -224,6 +224,20 @@ def test_clear_resets_both_counters():
     assert len(buf) == 0 and buf.seen == 0
 
 
+def test_uniform_buffer_refuses_a_weight_instead_of_ignoring_it():
+    """The uniform buffer's contract is uniform; a caller passing weight=...
+    meant weighted inclusion, which lives in WeightedReservoir (fsp.py).
+    Accepting-and-ignoring the weight would fake linear averaging while
+    looking implemented — the silent-shape failure this whole branch keeps
+    designing against. No call site does this today (audited); the guard
+    makes that an invariant instead of a habit."""
+    buf = ReservoirBuffer(4)
+    with pytest.raises(ValueError, match="uniform by contract"):
+        buf.add("x", 2.0)
+    buf.add("x", 1.0)          # the no-op weight stays legal
+    assert buf.contents() == ["x"]
+
+
 def test_bad_construction_is_rejected():
     with pytest.raises(ValueError):
         ReservoirBuffer(0)
