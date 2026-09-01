@@ -32,10 +32,30 @@ def smoke_run(tmp_path_factory):
     # capacity 300 vs ~700 items/round GUARANTEES the A-Res overflow the
     # weighting needs (item count, not weight mass — the class docstring's
     # documented trap); burn_in 0.75 of 8 iters keeps only iters 6-7.
+    # gate=False (campaign #1/#2 behaviour) is deliberate: an 8-iter smoke
+    # BR cannot reliably clear break-even, and a skipped round would leave
+    # the reservoir UNDERFLOWED — which is exactly the regime this fixture
+    # must NOT measure. The gate's own path gets its own fixture below.
     ckpt = tmp_path_factory.mktemp("nfsp")
     stats = train_nfsp.train(
         rounds=2, iters_per_round=8, hands_per_iter=40,
-        capacity=300, burn_in=0.75,
+        capacity=300, burn_in=0.75, gate=False,
+        fit_epochs=3, fit_batch=32, lr=3e-3, max_fit_rows=10_000,
+        hidden=(32, 32), ckpt_dir=str(ckpt), seed=11, quiet=True,
+        br_cfg=PPOConfig(minibatch=32))
+    return stats, ckpt
+
+
+@pytest.fixture(scope="module")
+def gated_run(tmp_path_factory):
+    """Same tiny loop with the campaign #3 gate ON — seed 11's round-1 BR
+    tail is deterministically negative, so this fixture measures a real
+    skip end to end (deterministic engine; same discipline as the A/B
+    seeds)."""
+    ckpt = tmp_path_factory.mktemp("nfsp-gated")
+    stats = train_nfsp.train(
+        rounds=2, iters_per_round=8, hands_per_iter=40,
+        capacity=300, burn_in=0.75, gate=True,
         fit_epochs=3, fit_batch=32, lr=3e-3, max_fit_rows=10_000,
         hidden=(32, 32), ckpt_dir=str(ckpt), seed=11, quiet=True,
         br_cfg=PPOConfig(minibatch=32))
@@ -49,7 +69,11 @@ def test_two_rounds_produce_round_stats_and_a_checkpoint(smoke_run):
         assert st.rows > 0
         assert np.isfinite(st.fit_loss), f"CE loss not finite: {st.fit_loss}"
     assert (ckpt / "pi_last.pt").exists()
-    assert stats[1].seen > stats[0].seen, "weight mass must accumulate"
+    # the gate can legitimately zero a round's weight (a smoke BR of 8
+    # iters may not clear break-even); mass grows UNLESS that happened,
+    # and a skipped round must say so — never silently.
+    assert stats[1].seen > stats[0].seen or stats[1].skipped, \
+        "weight mass must accumulate, or the round must be marked skipped"
 
 
 def test_burn_in_discards_and_round_weights_accumulate(smoke_run):
@@ -118,3 +142,47 @@ def test_harvest_hook_receives_the_iteration_index():
         seed=4, eval_hands=0, cfg=PPOConfig(minibatch=32),
         harvest=lambda eps, it: seen_its.append(it))
     assert seen_its == [0, 1, 2]
+
+
+# -- campaign #3: the oracle-starvation gate ----------------------------------
+
+def test_round_weight_zeroes_a_losing_br():
+    """The exact failure shape campaign #2 measured: rounds 18-29's BRs
+    ended BELOW break-even and entered the average at weight 19..30."""
+    assert train_nfsp.round_weight(-25.0, 18) == 0.0
+    assert train_nfsp.round_weight(0.0, 25) == 0.0    # break-even is not a move
+
+
+def test_round_weight_keeps_linear_over_rounds_for_winning_brs():
+    assert train_nfsp.round_weight(1.0, 5) == 6.0
+    assert train_nfsp.round_weight(1695.9, 0) == 1.0
+    # magnitude does NOT scale the weight — sequence position does
+    assert train_nfsp.round_weight(2.0, 9) == train_nfsp.round_weight(200.0, 9)
+
+
+def test_round_weight_round0_is_exempt_even_when_losing():
+    """An empty reservoir cannot be fitted; a losing round 0 is a broken
+    campaign, not a policy to protect the average from."""
+    assert train_nfsp.round_weight(-500.0, 0) == 1.0
+
+
+def test_gate_flag_reproduces_the_old_behaviour():
+    assert train_nfsp.round_weight(-25.0, 18, gate=False) == 19.0
+
+
+def test_gated_skip_leaves_the_reservoir_intact(gated_run):
+    """End-to-end: a round whose BR loses to Pi harvests NOTHING, and the
+    fit that follows runs on the previous rounds' rows instead of being
+    diluted by the non-move. This is the shape campaign #2 measured at
+    rounds 18-29 (losing BRs, weight 19..30) — the gate must make it
+    impossible. Deterministic here: seed 11's round-1 BR tail is negative.
+    """
+    stats, _ckpt = gated_run
+    assert stats[1].br_bb100 <= 0.0, "fixture assumes a losing round-1 BR"
+    assert stats[1].skipped
+    assert stats[1].rows == stats[0].rows, \
+        "a skipped round must add zero rows"
+    assert stats[1].seen == stats[0].seen, \
+        "a skipped round must add zero weight mass"
+    assert np.isfinite(stats[1].fit_loss), \
+        "the fit after a skip runs on the surviving rows — it must not raise"

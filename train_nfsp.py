@@ -29,6 +29,19 @@ mechanisms, specific to ladder B:
    init phase weigh as much as its trained phase, since a round spans
    only 1/30th of the iteration range.
 
+3. (Campaign #3, after the oracle-starvation diagnosis — HANDOFF 0.6
+   step 10): campaign #2's Pi got WORSE with rounds (r020 probe 204.4,
+   r030 probe 737.5, both converged, both seeds). Cause: from ~round 18
+   the in-loop BR's own curve ENDED below break-even — 40 PPO iters from
+   a random restart stopped being enough to exploit Pi — and those
+   diffuse losing "best responses" entered the fictitious average at the
+   reservoir's HIGHEST weights. A policy that loses to Pi is not a best
+   response; it is a non-move, and the fictitious-play sequence may not
+   contain it. Fix: `round_weight` — a round harvests only if its BR's
+   final curve is positive, and --iters defaults to 80 because the
+   starvation was in the oracle's training budget, not in the weighting
+   alone.
+
 The reservoir is WeightedReservoir (A-Res, fsp.py) — proportional
 inclusion needs the stream to OVERFLOW capacity; tests assert it does.
 
@@ -74,11 +87,37 @@ class RoundStat:
     rows: int                # reservoir size after this round
     seen: int                # total WEIGHT mass ever harvested (A-Res)
     fit_loss: float
+    skipped: bool = False    # gate: br_bb100 <= 0 -> zero rows harvested
+
+
+def round_weight(br_tail_bb100: float, r: int,
+                 gate: bool = True) -> float:
+    """The round's fictitious-play weight (campaign #3 fix).
+
+    A policy that loses to Pi is not a best response — the oracle
+    was starved (HANDOFF 0.6 step 10: campaign #2's losing rounds 18-29
+    entered the average at the HIGHEST linear weights and r030 measured
+    3x worse than r020). Those rounds are non-moves: weight 0, which
+    WeightedReservoir skips outright (documented, never a silent
+    down-weight). Positive rounds keep the Kuhn-validated linear
+    weight = round + 1 — continuous re-scaling by curve size was
+    considered and rejected: the gate validated LINEAR-over-rounds
+    averaging, and the fictitious-play sequence is a sequence of MOVES,
+    not of magnitudes.
+
+    Round 0 is exempt: an empty reservoir cannot be fitted (fit() raises
+    on it by contract), and a round-0 BR failing to beat a random-init Pi
+    is a broken campaign, not a policy to protect the average from."""
+    if r == 0:
+        return 1.0
+    if gate and br_tail_bb100 <= 0.0:
+        return 0.0
+    return float(r + 1)
 
 
 def train(
     rounds: int = 30,
-    iters_per_round: int = 40,
+    iters_per_round: int = 80,
     hands_per_iter: int = 2000,
     capacity: int = 250_000,
     burn_in: float = 0.75,
@@ -90,6 +129,7 @@ def train(
     ckpt_dir: str = "models/nfsp",
     seed: int = 7,
     quiet: bool = False,
+    gate: bool = True,
     br_cfg: PPOConfig | None = None,
 ) -> list[RoundStat]:
     if not 0.0 <= burn_in < 1.0:
@@ -117,17 +157,19 @@ def train(
     stats: list[RoundStat] = []
     t0 = time.time()
     for r in range(rounds):
-        def harvest(episodes, it, _p=player, _w=r + 1):
+        # The gate reads the round's FINAL curve, which does not exist until
+        # best_response returns — so the burn-in-passed episodes are held
+        # for the round (~55k rows, tens of MB) and enter the reservoir in
+        # one weighted flush, or not at all.
+        pending: list = []
+
+        def harvest(episodes, it, _p=pending):
             # Burn-in: this round's BR starts from RANDOM net (the oracle
             # restarts per round), so iterations below burn_iters have not
             # best-responded to anything yet -- discarded, not down-weighted.
-            # The weight is the ROUND index: the fictitious-play sequence is
-            # the list of trained BRs, one move per round, and linear-over-
-            # rounds weighting is the CFR averaging the Kuhn gate validated.
             if it < burn_iters:
                 return
-            for ep in episodes:
-                _p.record_episode(ep, weight=_w)   # br_mode=True rows
+            _p.extend(episodes)
 
         # eval_hands=0: the expensive duplicate eval is step 10's job once,
         # not every round; the BR's TRAINING curve is this loop's signal.
@@ -136,19 +178,29 @@ def train(
             "PokrNFSP-Pi", iters_per_round, hands_per_iter,
             seed + r * 7919, mc_iters=30, mc_fast=True,
             eval_hands=0, cfg=br_cfg, harvest=harvest, model_opponents=False)
-        loss = player.fit()
         curve = report.curve
-        st = RoundStat(r, sum(curve[-10:]) / len(curve[-10:]), curve[0],
-                       len(buffer), int(buffer.weight_sum), loss)
+        tail = sum(curve[-10:]) / len(curve[-10:])
+        w = round_weight(tail, r, gate=gate)
+        if w > 0:
+            for ep in pending:
+                player.record_episode(ep, weight=w)    # br_mode=True rows
+        loss = player.fit()
+        st = RoundStat(r, tail, curve[0],
+                       len(buffer), int(buffer.weight_sum), loss,
+                       skipped=(w <= 0.0))
         stats.append(st)
         if not quiet:
             print(f"round {r:>3} | BR curve {st.br_first_bb100:+8.1f} -> "
                   f"{st.br_bb100:+8.1f} bb/100 | rows {st.rows:>9,}"
-                  f" | fit loss {st.fit_loss:.4f} | {time.time() - t0:6.0f}s")
+                  f" | fit loss {st.fit_loss:.4f}"
+                  f" | {'SKIP w=0' if st.skipped else f'w={w:g}'}"
+                  f" | {time.time() - t0:6.0f}s")
 
         save_pi(net, str(pdir / "pi_last.pt"), round=r, config={
             "rounds": rounds, "capacity": capacity, "seed": seed,
-            "fit_epochs": fit_epochs, "fit_batch": fit_batch, "lr": lr},
+            "fit_epochs": fit_epochs, "fit_batch": fit_batch, "lr": lr,
+            "iters_per_round": iters_per_round, "burn_in": burn_in,
+            "gate": gate},
             reservoir_rows=len(buffer), reservoir_weight_sum=buffer.weight_sum)
         if (r + 1) % 10 == 0:
             save_pi(net, str(pdir / f"pi_r{r + 1:03d}.pt"), round=r + 1)
@@ -160,7 +212,11 @@ def main(argv: list[str] | None = None) -> int:
         description="Ladder-B NFSP: PPO best responses in, average policy out "
                     "(heads-up only)")
     ap.add_argument("--rounds", type=int, default=30)
-    ap.add_argument("--iters", type=int, default=40, help="PPO iters per round")
+    ap.add_argument("--iters", type=int, default=80,
+                    help="PPO iters per round (campaign #1/#2 used 40; the "
+                         "oracle-starvation diagnosis says that budget went "
+                         "below what Pi needs to be exploited -> losing "
+                         "'BRs' poisoned the average)")
     ap.add_argument("--hands-per-iter", type=int, default=2000)
     ap.add_argument("--capacity", type=int, default=250_000,
                     help="M_SL slots (WeightedReservoir; the stream must "
@@ -171,6 +227,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-fit-rows", type=int, default=500_000,
                     help="uniform subsample cap per supervised fit "
                          "(bounds memory; 0 disables)")
+    ap.add_argument("--no-gate", dest="gate", action="store_false",
+                    help="campaign-#1/#2 behaviour: harvest every round, "
+                         "losing BRs included (reproduction flag only — the "
+                         "oracle-starvation result is why this is not the "
+                         "default)")
     ap.add_argument("--fit-epochs", type=int, default=20)
     ap.add_argument("--fit-batch", type=int, default=1024)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -180,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     train(rounds=args.rounds, iters_per_round=args.iters,
           hands_per_iter=args.hands_per_iter, capacity=args.capacity,
-          burn_in=args.burn_in,
+          burn_in=args.burn_in, gate=args.gate,
           fit_epochs=args.fit_epochs, fit_batch=args.fit_batch, lr=args.lr,
           max_fit_rows=args.max_fit_rows,
           ckpt_dir=args.ckpt_dir, seed=args.seed, quiet=args.quiet)
