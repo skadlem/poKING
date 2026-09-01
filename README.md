@@ -13,16 +13,18 @@ edge honestly under very heavy noise.
 | claim | measurement | how |
 |---|---|---|
 | PPO agent beats the heuristic | **+604.0 ± 36.1 bb/100** heads-up, 30k duplicate hands | `python -m pokr.duplicate --a rl --b self --lineup "" --hands 20000 --mc-iters 150 --fast` |
-| least exploitable bot measured | **670.6 ± 68.8** bb/100 (heuristic: 1019.7) | `python -m pokr.rl.exploit --target rl --iters 200` |
+| least exploitable bot measured | **375.2 ± 59.2** bb/100 — NFSP average policy (`nfsp_final.pt`, gated campaign #3, round 20), seed-7 probe of 240 PPO iters; the same 240-iter probe scores the shipped PPO at **792.8 ± 62.4** and the heuristic far worse. All exploitability numbers here are LOWER BOUNDS that grow with probe budget — never compare across budgets | `python -m pokr.rl.exploit --target nfsp --iters 240` |
 | 4.4x the heuristic's edge vs a third-party trained DQN | **+979.5 ± 97.9** (heuristic: +221.6) | duplicate vs the RLCard DQN, 3000 decks |
 | profitable vs an external engine's bots | +5.1 / +40.5 / +49.9 bb/100 (Honest/Fish/Random, heads-up) | `python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7` |
-| NFSP average policy, 30-round ladder-B campaign | failed the success condition: pi_last 737.5 ± 86.0 bb/100 (seed 7) vs the PPO's 670.6; late rounds made it worse (oracle starvation, measured on two seeds — see NFSP section) | `python -m pokr.rl.exploit --target nfsp --iters 120` |
+| NFSP: how that number was earned | campaign #2 measured 737.5 (failed); the diagnosis (oracle starvation, two seeds) and the one-line gate brought it to 241.6 at the same 120-iter budget — full story in the NFSP section | `python train_nfsp.py --rounds 30` |
 
-**What it is not.** 670 bb/100 exploitable is catastrophic in absolute terms —
-a best response wins ~6.7 big blinds per hand, taking a 100bb stack every ~15
-hands. Nothing here is close to equilibrium; the scripted opponents are weak,
-and the honest summary is "a good exploiter of weak static opponents, measured
-carefully." Closing that gap is what the NFSP workstream (below) is for.
+**What it is not.** Even 375 bb/100 is catastrophic by any serious
+standard — a best response wins ~3.8 big blinds per hand from our least-
+exploitable agent, taking a 100bb stack every ~26 hands. The probe is a
+lower bound (a stronger exploiter would take more), nothing here is close to
+equilibrium, and the scripted opponents are weak. The honest summary remains
+"a good exploiter of weak static opponents, and a first average-policy
+result that clears the bar we set before the run, measured carefully."
 
 **Claim discipline.** Every headline number here is seed-replicated or
 withdrawn. When a result failed to replicate across seeds, the README says so
@@ -57,9 +59,10 @@ rather than modelling:
   depth fix above. The reasoning and the dead ends are recorded in the
   modules so they are not rediscovered.
 
-**The result.** A PPO agent (110k parameters, ~15 min of CPU training) and a
-30-round NFSP campaign against it — both in the table above, both reproducible
-with the commands there.
+**The result.** A PPO agent (110k parameters, ~15 min of CPU training), and
+an NFSP average policy whose latest checkpoint is 2.1x less exploitable at
+matched probe strength — all in the table above, all reproducible with the
+commands there.
 
 Spec: `docs/superpowers/specs/2026-08-06-poker-bot-design.md`. The NFSP
 design note is `docs/design/nfsp.md`; session history and the roadmap state
@@ -403,10 +406,17 @@ scored over 4,000 duplicate decks:
 
 | target | exploitability lower bound | leak hunter says |
 |---|---|---|
-| **PPO agent (shipped: league pool, fixed depth)** | **670.6 ± 68.8** | +468.1 ± 58.0 |
+| PPO agent (shipped: league pool, fixed depth) | 670.6 ± 68.8 | +468.1 ± 58.0 |
 | PPO agent (league pool, carry-over depth) | 879.4 ± 101.5 | −136.4 ± 199.8 |
 | PokerBot (the heuristic) | 1019.7 ± 89.9 | +14.8 ± 3.9 |
 | PPO agent (leak hunter in pool) | 1294.3 ± 86.9 | +1202.7 ± 268.7 |
+
+**These bounds grow with probe budget — never compare across budgets.**
+Re-probing the shipped PPO at 240 iters (480k exploiter hands, seed 7)
+raises its bound 670.6 → **792.8 ± 62.4**; at that matched budget the NFSP
+average policy (`nfsp_final.pt`, gated campaign #3) probes at
+**375.2 ± 59.2** — the repo's least-exploitable artifact, 2.1x below the
+PPO's number at equal strength (see the NFSP section).
 
 Three things fall out of that table, and two of them are uncomfortable.
 
@@ -424,9 +434,10 @@ what training on your own test set looks like. The shipped checkpoint is the
 league-pool agent, not the leak-pool one, on the strength of this table rather
 than the leak-hunter column.
 
-**Every bot here is hugely exploitable.** ~900-1300 bb/100 means none of them
-is remotely near equilibrium; the trained agent is somewhat better than the
-heuristic on this axis, and that is the whole claim.
+**Every bot here is hugely exploitable.** ~700-1300 bb/100 at the 120-iter
+probe budget means none of them is remotely near equilibrium; the trained
+agent is somewhat better than the heuristic on this axis, and the NFSP
+average policy (below) is better than both at matched probe strength.
 
 Caveats, in order of how much they matter:
 
@@ -443,7 +454,7 @@ Caveats, in order of how much they matter:
 - Beating the heuristic head-to-head is not the same as playing well. Neither
   has been tested against a strong NLH solver.
 
-### NFSP: the average-policy pipeline (and its honest negative result)
+### NFSP: the average-policy pipeline (a negative result, a diagnosis, and an intervention)
 
 Every bot above is ~670-1020 bb/100 exploitable, which is far from
 equilibrium. `pokr/rl/` grew a second algorithm family to attack that axis
@@ -496,11 +507,39 @@ that cannot lie:
    bound, so r020's true exploitability is ≥ 204.4, not = 204.4 — and the
    least-bad checkpoint still loses duplicate heads-up to the heuristic by
    −202.4 ± 33.9, so "best" means least-bad, not promotable.)
+5. **Campaign #3 confirmed the theory by intervention.** The gate
+   (`train_nfsp.py:round_weight` — a round whose BR ends at or below
+   break-even contributes zero rows; round 0 exempt; oracle budget
+   doubled to 80 iters) fired on 9 of 30 rounds — exactly the late-campaign
+   shape campaign #2 harvested at top weight. The claim, at matched probe
+   budget (240 exploiter iters, seed 7): the gated round-20 checkpoint
+   probes at **375.2 ± 59.2** against campaign #2's round-20 at **759.8 ±
+   79.3** — the gate halves exploitability at the same round, same budget;
+   and the shipped PPO's own bound, re-anchored at the same 240-iter
+   strength, is **792.8 ± 62.4** (from 670.6 at 120 iters — every bound in
+   this repo grows with probe budget, which is why the comparison above is
+   budget-matched). The pre-registered bar ("well below the shipped PPO")
+   passes decisively on seed 7 at matched budget; seed 11 (125.9 vs 176.3
+   at the 120-iter budget) is suggestive but confounded the other way —
+   the NFSP exploiter there was the weaker of the pair (curve +41 vs
+   +143), so it proves less about NFSP;
+   pi_last (30 rounds) is *not* the best artifact — its 240-iter bound is
+   673.9, so a shallow late-round degradation survives the gate: barely-
+   winning BRs (tails +3..+52) are still diffuse, and the gate only clips
+   negatives. `models/nfsp/nfsp_final.pt` = the gated round-20
+   checkpoint — the repo's least-exploitable artifact and the plugin's
+   default path. What it still is *not*: promotable over the PPO as an
+   exploiter of weak opponents (−110.9 ± 32.2 duplicate vs the heuristic;
+   an equilibrium approximator is *supposed* to win less against weak
+   opponents — design note 8), nor close to equilibrium — a best response
+   still takes ~3.8 bb/hand from it.
 
 What this buys the project: an equilibrium-approximation path with a validated
-core, two diagnostics that turn "converged" claims into arithmetic
-(loss-vs-entropy-floor; per-round re-probe), and a falsified hypothesis with a
-mechanism — the failure was *found*, not guessed.
+core, three diagnostics that turn "converged" claims into arithmetic
+(loss-vs-entropy-floor; per-round re-probe; budget-matched re-anchoring), a
+falsified hypothesis replaced by one that survived its own intervention test,
+and a 2.1x reduction in exploitability vs the shipped PPO at equal probe
+strength — measured, caveat and all.
 
 ## Module map
 
