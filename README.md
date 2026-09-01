@@ -16,7 +16,7 @@ edge honestly under very heavy noise.
 | least exploitable bot measured | **670.6 ± 68.8** bb/100 (heuristic: 1019.7) | `python -m pokr.rl.exploit --target rl --iters 200` |
 | 4.4x the heuristic's edge vs a third-party trained DQN | **+979.5 ± 97.9** (heuristic: +221.6) | duplicate vs the RLCard DQN, 3000 decks |
 | profitable vs an external engine's bots | +5.1 / +40.5 / +49.9 bb/100 (Honest/Fish/Random, heads-up) | `python -m pokr.ppe_compare --hands 2000 --mc-iters 10 --seed 7` |
-| NFSP average policy, 30-round ladder-B campaign | 737.5 ± 86.0 bb/100 exploitable (seed 7) — the honest result: **not yet competitive** with the PPO's 670.6 | `python -m pokr.rl.exploit --target nfsp --iters 120` |
+| NFSP average policy, 30-round ladder-B campaign | failed the success condition: pi_last 737.5 ± 86.0 bb/100 (seed 7) vs the PPO's 670.6; late rounds made it worse (oracle starvation, measured on two seeds — see NFSP section) | `python -m pokr.rl.exploit --target nfsp --iters 120` |
 
 **What it is not.** 670 bb/100 exploitable is catastrophic in absolute terms —
 a best response wins ~6.7 big blinds per hand, taking a 100bb stack every ~15
@@ -473,16 +473,34 @@ that cannot lie:
    coin-flip floor. The converged probe says Pi_last is **737.5 ± 86.0**
    bb/100 exploitable (seed 7; 1011.1 ± 86.5 on seed 11) versus the shipped
    PPO's 670.6 — and it loses duplicate heads-up to the heuristic by −285.9 ±
-   34.7. **The success condition ("well below 670.6") failed honestly.** At 30
-   fictitious-play moves the average is still dominated by weak early best
-   responses; NFSP's ceiling only rises with rounds, and 30 is a fraction of
-   what the method needs. The checkpoints and logs are kept locally as
-   negative evidence.
+   34.7. **The success condition ("well below 670.6") failed honestly.**
+4. **The follow-up diagnostic (`nfsp_entropy_diagnostic.py`) falsified the
+   obvious explanation.** "30 rounds is just too few" predicts exploitability
+   falling monotonically with rounds; re-probing the saved checkpoints at the
+   same probe budget says otherwise — the ladder goes **down then up**:
+   264.6 → 204.4 → 737.5 (seed 7) and 498.8 → 468.3 → 1011.1 (seed 11) for
+   rounds 10 → 20 → 30, all converged. Late rounds made Pi *worse*. The
+   mechanism was already in the campaign log: from ~round 18 the in-loop
+   oracle's own curve ends **below break-even** — a 40-iteration PPO restart
+   stopped being enough to best-respond to Pi — and the harvest fed those
+   diffuse "losing BR" tails into the average at the reservoir's *highest*
+   weights (linear-over-rounds). The component behaviours are sharp (entropy
+   0.26/0.84 vs the 1.59 uniform floor) so the data isn't the problem; the
+   **oracle is starved**: the round-29 in-loop oracle finished training at
+   −27 bb/100 against pi_last (it could not find an exploit), while a
+   converged 120-iter probe takes 737.5 from the same checkpoint.
+   The fix for campaign #3 is per-round oracle strength (more iters, or
+   weight rows by the BR's final curve clipped at zero — never let a losing
+   "BR" hold top weight), not more rounds: without that fix, rounds make it
+   worse, measured on two seeds. (Caveat kept honest: the probe is a lower
+   bound, so r020's true exploitability is ≥ 204.4, not = 204.4 — and the
+   least-bad checkpoint still loses duplicate heads-up to the heuristic by
+   −202.4 ± 33.9, so "best" means least-bad, not promotable.)
 
 What this buys the project: an equilibrium-approximation path with a validated
-core, a diagnostic (loss-vs-entropy-floor) that turns "converged" claims into
-arithmetic, and a number that says how many more rounds this scale of compute
-buys — which is exactly the question the next campaign runs against.
+core, two diagnostics that turn "converged" claims into arithmetic
+(loss-vs-entropy-floor; per-round re-probe), and a falsified hypothesis with a
+mechanism — the failure was *found*, not guessed.
 
 ## Module map
 
