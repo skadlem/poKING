@@ -13,3 +13,4 @@ models/
 
 # local writeups / drafts (published separately, not part of the repo)
 docs/writeups/
+# the published copy lives at docs/variance-bug.html (GitHub Pages target)

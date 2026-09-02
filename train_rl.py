@@ -39,6 +39,7 @@ from pokr.bench import (
 )
 from pokr.bot import PokerBot
 from pokr.rl.agent import RLStrategy, RolloutBuffer
+from pokr.rl.encode import OBS_DIM, OBS_DIM_V1
 from pokr.rl.league import League
 from pokr.rl.net import PolicyValueNet, load, save
 from pokr.rl.ppo import PPOConfig, PPOTrainer
@@ -150,6 +151,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--league-size", type=int, default=30,
                     help="max frozen snapshots kept; old ones break cycles, so "
                          "prefer an interval that never fills this")
+    ap.add_argument("--no-history", action="store_true",
+                    help="train on the pre-history observation layout "
+                         "(OBS_DIM_V1). The betting-history block is on by "
+                         "default; this flag exists so the two layouts can be "
+                         "A/B'd against each other on duplicate decks rather "
+                         "than assumed to help.")
     ap.add_argument("--hidden", type=int, nargs="+", default=[256, 256])
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--clip", type=float, default=0.2)
@@ -202,7 +209,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"resumed from {args.resume} (iteration {start_iter}, "
               f"{len(resumed_league)} league snapshots)")
     else:
-        net = PolicyValueNet(hidden=tuple(args.hidden))
+        net = PolicyValueNet(obs_dim=OBS_DIM_V1 if args.no_history else OBS_DIM,
+                             hidden=tuple(args.hidden))
 
     cfg = PPOConfig(lr=args.lr, clip=args.clip, epochs=args.epochs,
                     minibatch=args.minibatch, lam=args.lam,
@@ -220,7 +228,8 @@ def main(argv: list[str] | None = None) -> int:
         league.restore(resumed_league, net.config())
     weights = [POOL_WEIGHTS.get(n, 1) for n in pool_names]
     params = sum(p.numel() for p in net.parameters())
-    print(f"net {args.hidden} ({params:,} params) | pool {pool_names} | "
+    print(f"net {args.hidden} ({params:,} params, obs {net.obs_dim}"
+          f"{'' if net.obs_dim == OBS_DIM else ' NO-HISTORY'}) | pool {pool_names} | "
           f"seats {seats_pool} | {args.hands_per_iter} hands/iter | "
           f"mc_iters {args.mc_iters} (opp {args.opp_mc_iters})"
           f"{' fast' if args.fast else ''}"

@@ -11,6 +11,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from pokr.rl.agent import RLStrategy  # noqa: E402
+from pokr.rl.encode import OBS_DIM  # noqa: E402
 from pokr.rl.league import League  # noqa: E402
 from pokr.rl.net import PolicyValueNet  # noqa: E402
 
@@ -61,8 +62,10 @@ def test_max_size_evicts_oldest():
 
 
 def test_opponent_factory_builds_a_frozen_non_recording_agent():
+    # a real obs_dim, unlike the stubs above: this test actually seats an
+    # RLStrategy, which reads its observation layout off the net's obs_dim
     league = League()
-    league.snapshot(PolicyValueNet(obs_dim=16, hidden=(8,)))
+    league.snapshot(PolicyValueNet(obs_dim=OBS_DIM, hidden=(8,)))
     factory = league.opponent_factory(random.Random(0), num_players=6)
     agent = factory(random.Random(1))
     assert isinstance(agent, RLStrategy)
@@ -75,7 +78,7 @@ def test_factory_pins_one_snapshot_for_the_whole_session():
     models describe a single consistent opponent."""
     league = League()
     for _ in range(4):
-        league.snapshot(PolicyValueNet(obs_dim=16, hidden=(8,)))
+        league.snapshot(PolicyValueNet(obs_dim=OBS_DIM, hidden=(8,)))
     factory = league.opponent_factory(random.Random(3))
     nets = {id(factory(random.Random(i)).net) for i in range(5)}
     assert len(nets) == 1

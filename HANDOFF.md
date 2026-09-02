@@ -1,8 +1,235 @@
-# Handoff — pokr Poker Bot (session 2026-08-08)
+# Handoff — pokr Poker Bot
 
 **Repo:** https://github.com/skadlem/poKING (public)
-**Branch:** everything merged to `main` (PR #1 merged + one cherry-pick)
-**Date:** 2026-08-08
+**Latest session:** 2026-08-31 (section 0 below). Sections 1-8 are the
+2026-08-08 handoff and are still accurate except where section 0 says
+otherwise.
+
+---
+
+## 0. Session 2026-08-31 — NFSP prerequisites
+
+**Branch:** `feat/nfsp-prereqs`, pushed to origin, working tree clean, no PR
+opened. Branched off `main` at `170c46c`.
+
+    d9516aa fix(exploit): a probe that never cleared break-even bounds nothing
+    fb3799e docs: the betting-history block is 2.9x less exploitable   <- HEADLINE RETRACTED by d9516aa
+    5d19efc docs: record the encoding A/B and the road to NFSP
+    d78a8af feat(rl): Kuhn poker harness with exact exploitability
+    5917f88 feat(rl): encode betting history, so the observation is an information state
+    3053711 docs: design note for NFSP, and why it fits this engine
+
+`fb3799e`'s message claims a 2.9x exploitability win from one seed. It does not
+replicate; `d9516aa` retracts it. Both are kept in history on purpose. **Read
+section 0.4 before quoting any number from `fb3799e`.**
+
+Full suite: **296 passed** (was 250). ~1 min idle, ~3.5 min if a training or
+duplicate run is competing for CPU. The venv is `.venv/` and is NOT on the
+default `python3` — use `.venv/bin/python`.
+
+**Nothing was promoted and the README is untouched** (section 0.5).
+
+### 0.1 What this session was
+
+Research + design for NFSP, then the two prerequisites that do not depend on
+any NFSP code existing. **The design note is `docs/design/nfsp.md` and it is
+the document to read first** — this section is only what happened, not why.
+
+Headline of the design note: NFSP is the right *next* algorithm here not
+because it beats Deep CFR (it does not — lower sample efficiency, higher
+exploitability in the literature) but because **it needs no engine changes**.
+It only plays hands front to back, which `bench.play_session` already does.
+Deep CFR needs tree traversal and `PokerGame.play_hand` is a straight-line
+call with no step interface, no cloning and no undo.
+
+### 0.2 Betting-history encoding (`5917f88`)
+
+`encode_obs` never touched `state.action_history`, so the observation was a
+snapshot of chip positions only. Two different preflop lines that arrive at the
+same chip position encoded **byte-identically** — heads-up, "SB limps, BB
+raises to 6, SB calls" versus "SB raises to 6, BB calls". Who raised preflop
+was absent. `test_two_preflop_lines_alias_in_the_old_layout_and_separate_in_the_new`
+asserts the aliasing rather than describing it.
+
+Added 16 dims: preflop aggressor + current-street aggressor (one-hot over
+relative seat, last slot = nobody), plus street and preflop raise counts capped
+at 4. OBS_DIM 160 -> 176.
+
+**The layout contract, which matters for everything downstream:** the block is
+appended LAST, so `obs[:OBS_DIM_V1]` is byte-identical to the old layout and
+`models/rl/ppo_final.pt` (and every README number) still runs. `RLStrategy`
+infers the layout from `net.obs_dim` rather than a flag — the layout is part of
+a checkpoint's contract and obs_dim already records it. An obs_dim matching
+neither layout raises at construction. **Do not insert new observation fields
+anywhere but the end**, or pre-history checkpoints die.
+
+`train_rl.py --no-history` trains the old layout; the banner prints which.
+
+### 0.3 Kuhn harness (`d78a8af`)
+
+`pokr/rl/kuhn.py` — the gate an equilibrium algorithm passes before it sees
+NLHE. Best response is an exhaustive max over 2**6 pure strategies per player,
+so `exploitability()` is **exact**: not a bound, not an estimate, nothing to
+converge. Self-validating — the Nash family is at machine epsilon for every
+alpha in [0, 1/3], game value -1/18, uniform play 11/24 exploitable.
+
+No torch, no numpy, no rng in the pure functions.
+
+Rationale (design note section 6): `pokr/rl/exploit.py` grades a bot by
+training a PPO best response, which is a lower bound off a noisy run. Fine for
+ranking bots, useless for deciding whether a reservoir sampler has an
+off-by-one. This project's headline finding is that its own exploitability
+proxy under-reported by ~70x; running an unvalidated equilibrium algorithm
+against an approximate metric is that same trap.
+
+### 0.4 A/B of the encoding — three seeds, and a retracted headline
+
+Seeds 7, 11, 23 x two arms. Each arm: 600 iters x 2000 hands, seats 2,6,
+`--fast --reset-stacks`, 8 workers (~34 min); scored on 20k duplicate decks vs
+the heuristic and by a best-response probe (120 iters, probe seed fixed at 7,
+5,000 decks). Checkpoints in `models/ab/s{seed}_{hist,nohist}/` (gitignored).
+
+**Win rate vs the heuristic (bb/100)** — all three seeds usable:
+
+| seed | history | no history | diff |
+|---|---|---|---|
+| 7 | +461.76 | +639.51 | −177.75 |
+| 11 | +514.46 | +581.80 | −67.34 |
+| 23 | +297.64 | +658.72 | −361.08 |
+| **mean** | **+424.62** | **+626.68** | **−202.06** |
+
+Settled: the block costs ~200 bb/100 against the heuristic on every seed. It
+also destabilises training — between-seed spread 217 for history vs 77 without.
+
+**Exploitability (bb/100)** — only 2 of 3 seeds produced a usable probe:
+
+| seed | history | no history | diff |
+|---|---|---|---|
+| 7 | 192.3 | 565.6 | −373.3 |
+| 11 | 553.2 | 609.7 | −56.5 |
+| 23 | *probe failed* | *probe failed* | — |
+
+**RETRACTED: the "2.9x less exploitable" headline in commit `fb3799e` does not
+replicate.** Seed 11 gives a 56.5 gap, inside a single probe's ±60 bar. Both
+usable seeds favour history directionally, but at 373 and 57 from n=2 the
+magnitude is unestablished, and seed 7's 192.3 is the outlier rather than the
+effect. Commit `fb3799e`'s message is wrong on this point and is corrected by
+the commit that added this section — the git history keeps both, deliberately.
+
+**Where that leaves the block.** It is kept on the section 3.1 correctness
+argument alone (an average over aliased information states is an equilibrium of
+no game), which does not depend on either measurement. It has NOT earned a
+performance claim. Do not quote 192.3 or 2.9x anywhere.
+
+### 0.5 The probe fails ~1/3 of the time and says "unexploitable"
+
+Both seed-23 probes finished with the exploiter below break-even:
+
+    seed 23, history:    curve -341 -> +27,  eval  +14.95 ± 7.15
+    seed 23, no history: curve -410 -> -91,  eval  -61.67 ± 41.91
+
+`ExploitReport.exploitability` clamps negatives to zero, so these printed as
+`exploitability lower bound: 14.9` and `0.0` — which read as *the least
+exploitable agents ever measured in this project*, against targets whose
+sibling seeds measured 553.2 and 609.7. Two of six probes failed this way.
+
+Same failure shape as the leak hunter under-reporting by 70x, one layer up: a
+broken instrument returning a small number that looks like good news.
+
+**Fixed:** `ExploitReport` now has `converged`, and `format()` prints
+`PROBE FAILED ... bounds NOTHING` rather than a lower bound when the exploiter
+never cleared break-even. Tests in `tests/test_exploit.py`. **Check `converged`
+before believing any exploitability number, including future NFSP ones.**
+
+**Not promoted, and README not rewritten — an explicit decision, 2026-08-31.**
+Promotion was raised and declined after the three-seed table came in.
+`plugin.py` still loads `models/rl/ppo_final.pt` (the obs-160, seed-7,
+no-history agent) and the README's Exploitability section is unchanged, so
+every published number still describes the agent it was measured on.
+
+If promotion is ever revisited, the selection rule that avoids re-selecting on
+the noise this session already retracted: **require a converged probe, then
+take the best duplicate win rate.** That picks `models/ab/s11_hist`
+(+514.46 vs the heuristic, 553.2 exploitable) — NOT `models/rl_history`, whose
+192.3 is the outlier. Note that any such pick is a max over three seeds and so
+is itself optimistically biased. And re-open only with a probe budget large
+enough that failures are rare (more `--iters`) and more than three seeds.
+
+Promotion would also make the README's headline numbers **worse**, not better:
+the history arm wins less against every scripted opponent. That is the expected
+direction (section 8 of the design note) and not a reason on its own to avoid
+it — but it should be a deliberate choice, not a surprise.
+
+### 0.6 Roadmap to NFSP implemented
+
+Strict order. Nothing below step 6 starts until step 6 is green.
+
+| # | Work | Size |
+|---|---|---|
+| 1 | ~~Deterministic equity~~ **DONE `44238bf`**: `RLStrategy._equity` seeds `random.Random(hash(key))` per info state; key is ints-only (asserted stable across worker processes). Re-measured the shipped agent on this code: duplicate +633.8 ±31.7 (published +604 ±36) and probe 668.7 ±56.4 (published 670.6) — inside the old bars, no re-anchor needed. Suite 296 -> 300. | ~10 lines + test |
+| 2 | ~~Register `"nfsp"` in `plugin.py`~~ **DONE `0e58630`** (with step 7): `TrainedNFSPStrategy` registered as `nfsp` — lazy torch, lazy ckpt (`POKR_NFSP_CKPT`, default `models/nfsp/nfsp_final.pt`), `greedy` absent from every signature, `bench`/`duplicate`/`exploit` accept `--target nfsp` today (until step 9 writes a ckpt it raises FileNotFoundError on first decision — expected). | ~15 lines |
+| 3 | Opponent-model features off (3.2) | **DONE**: `NFSPStrategy` defaults `model_opponents=False` and a test asserts the DEFAULT is the contract |
+| 4 | ~~`pokr/rl/memory.py`~~ **DONE `06f753b`**: `ReservoirBuffer` (Algorithm R) + `ExponentialReservoirBuffer` (0.25 floor), torch/numpy-free. Uniformity asserted via chi-square (calibrated null ~174±19 over 40 seeds; a 5-sigma per-position band was tried, and produced a false failure at position 50 on the unbiased sampler — do not reintroduce it). Exact inclusion product for the floored variant is in the test and brute-force verified | small |
+| 5 | ~~`AvgPolicyNet`~~ **DONE `1e61456`**: `pokr/rl/avg_policy.py` (not `qnet.py` — ladder B has no QNet). Pi-only net + `fit_avg_policy` masked CE, `save`/`load` with the same reserved-key contract as `net.py`. Illegal slots verified to have exactly 0.0 probability AND 0.0 gradient; `act()` deliberately has no greedy flag (3.4). CE-recover-frequencies property is asserted, which is what makes Pi the fictitious average | small |
+| 6 | **GATE: GREEN** — ~~FSP on Kuhn~~ **DONE**: `pokr/rl/fsp.py` + `tests/test_fsp_kuhn.py`. `tabular_cfr` (ground truth) and `neural_avg_cfr` (the step 4+5 pipeline: `WeightedReservoir` A-Res harvest -> `AvgPolicyNet` CE fit) both asserted on exact `kuhn.exploitability()`; 1000 iters ~4 s, net 0.009-0.014 on five seeds, bar 0.05. Statistical bars calibrated on the real sampler before trusted (test_memory's lesson). Leduc remains the optional second gate for the neural path's feature generalisation | the real work |
+| 7 | ~~`pokr/rl/nfsp.py`~~ **DONE `0e58630`**: `NFSPStrategy` (samples; per-hand sigma flip; rows carry `br_mode` — design note 5 said Episode, but `fit()` is where it's consumed and PPO's Episode stays untouched); ladder A's epsilon path is a dormant drop-in (coin flip + tabular-Q seam tested, DQN missing); ladder B is the wired default | medium |
+| 8 | ~~`rollout.py` — both seats recording~~ **DONE `6b9229f`**: ladder B's BR data arrives through `exploit.best_response(harvest=...)`, so `_collect_one` never needed the change. "Both seats" is instead NFSPStrategy per-seat step buffers (`_steps[seat]`) — one Pi instance seated twice records every decision; asserted rows == engine decision count on a mirror session | small |
+| 9 | **DONE `6b9229f`**: `train_nfsp.py` — ladder-B loop (BR <- best_response(Pi, harvest); Pi <- fit on reservoir), heads-up by construction. Progress signal: the BR's training curve should fall as Pi improves. Smoke-verified 3 rounds; strength NOT yet claimed — that is step 10 | medium |
+| 10 | **DONE (failed honestly) — step 10 verdict + follow-up diagnostic answered the open question.** Campaign #2 (fixed data path, 30 rounds x 40 iters x 2000 hands, ~36 min): fit loss held ~0.4 nats under the 1.712 coin-flip floor and the per-round BR curves FALL monotonically (+1696 -> ~0 by round 17 -> -27 at round 29) — the loop ran and campaign #1's diagnosis was right. But `exploit --target nfsp` on pi_last: **737.5 ±86.0 (seed 7) and 1011.1 ±86.5 (seed 11), both converged** — vs the shipped PPO's 670.6 ±68.8 (seed 7). Success condition failed; duplicate vs the heuristic: NFSP loses **-285.9 ±34.7**. The DESIGN-vs-UNDERFIT question (`nfsp_entropy_diagnostic.py`, 2026-09-01): NEITHER — the answer is ORACLE STARVATION. Measured: components are sharp (per-state BR entropy 0.257 at r010 / 0.842 at r030 vs uniform floor 1.587; mean TV 0.58; 2-comp mixture entropy 1.351 — averaging generates entropy, as NFSP theory says, but that alone doesn't explain the failure); fresh 20-epoch CE on the shared slice beats pi_last by only +0.127 nats (confounded, not the fitter). The decisive probe: saved checkpoints re-probed at the same budget, per-round ladder **264.6 -> 204.4 -> 737.5 (seed 7) / 498.8 -> 468.3 -> 1011.1 (seed 11)** for r010 -> r020 -> r030, all converged — exploitability falls then SPIKES 3x, pi_last is not the best checkpoint, late rounds made Pi WORSE. Mechanism (already in the round log): from ~round 18 the in-loop 40-iter BR's own curve ends BELOW break-even (-315 -> -25 at r18 ... -262 -> -27 at r29) — it stops finding the exploit a 120-iter converged probe finds at 737.5 — and its diffuse tail rows enter the reservoir at the HIGHEST linear weights (w=20..30). A "BR" that loses to Pi is not a best response; it is noise labelled as truth. Consequences: (a) **pi_r020 = 204.4 ±59.9 seed 7** is the best NFSP artifact measured on the probe axis (1/3 of the shipped PPO on that seed; seed 11: 468.3 vs the PPO's weaker-probe 176 — same-seed only, lower bound both; and its duplicate vs the heuristic is STILL losing, -202.4 ±33.9, so "best checkpoint" means least-bad, not promotable); (b) campaign #3 fixes the ORACLE, not the round count: iters_per_round 40 -> 80-120 with an early-stop when the curve crosses +0, and/or weight harvest rows by max(final BR curve, 0) so a losing BR contributes nothing; (c) more rounds without the fix make it worse — r020->r030, two seeds. PPO seed-11 control 176.3 printed; NOT "670.6 was luck" — its exploiter's curve ended +143 vs +495 for the seed-7 NFSP exploiter; a weaker exploiter proves less. Campaign #1 negative evidence: 1073.8 ±94.2 / 932.7 ±85.8. |
+| 11 | **campaign #3 (the gate) — step 10's successor, verdict: the theory CONFIRMED BY INTERVENTION; the success condition PASSES at matched probe budget; nfsp_final promoted (round 20, later re-pointed by #4).** `train_nfsp.py` @ `42ecd02`: round_weight() zeroes any round whose BR tail ends <= 0 (round 0 exempt: an empty reservoir cannot be fitted), iters 40 -> 80. Campaign #3 log (models/nfsp_full3.log): the gate fired 9/30 rounds (9, 12, 17, 20, 24, 25, 27, 28, 29 — the exact late-campaign shape campaign #2 harvested at weights 25-30); fit loss plateaued ~1.21 (better than #2's 1.31+); BR tails first5 mean +1151 -> last5 mean -2.1 with the sign flipping round by round near the floor — the oracle is running at its budget limit against this Pi, which is what a healthy FP ladder looks like at convergence. Probes (all converged/resolved, 120-iter budget): pi_last **241.6 ±52.3 (seed 7) / 207.0 ±58.8 (seed 11)** — vs #2's 737.5/1011.1 that is ~3x better on BOTH seeds; the pre-registered success condition (well below the shipped PPO's 670.6, a seed-7 number) **passes on seed 7** — the first NFSP claim this repo gets to make. On seed 11 it is NOT decided: NFSP 207.0 vs the PPO's 176.3 — numerically NFSP is behind, though that PPO bound came from the campaign's weakest exploiter (curve +143) so same-seed 11 is "not worse, unresolved" rather than "worse". The collapse is gone. Ladder (seed 7): r010 201.6 -> r020 120.6 -> r030 241.6 — the U survives but is shallow. OPEN, RESOLVED by the 240-iter tiebreaker (models/nfsp_probe3_r020_big.log, models/nfsp_probe3_last_big.log, models/nfsp_probe2_r020_big.log, models/ppo_probe240_s7.log — all seed 7, all resolved/converged): the ladder at MATCHED budget is **r020 375.2 ±59.2 -> pi_last 673.9 ±72.7** — late rounds STILL hurt after the gate (barely-winning BRs, tails +3..+52, are diffuse mid-training policies and the gate only clips negatives), so the promotion pick is the round-20 checkpoint, and the campaign should early-stop or harvest-skip at a positive threshold, not at 0. But the 120-iter bounds were ALSO misleading: doubling the probe budget tripled every bound (r020 120.6->375.2, r030 241.6->673.9, and the shipped PPO's anchor 670.6->792.8). THE BUDGET-MATCHED HEADLINE: nfsp_final (= campaign #3 r020, promoted, plugin default path) 375.2 vs the PPO's 792.8 — 2.1x less exploitable at equal probe strength, AND the gate's own A/B at the same round and budget: campaign #2 r020 759.8 vs campaign #3 r020 375.2 (2.0x — the intervention worked exactly as much as the ladder comparison suggests, no more). Success condition: passes on seed 7 at matched budget; seed 11's 120-iter pair (NFSP 125.9 vs PPO 176.3) confounded by a weaker NFSP exploiter (curve +41 vs +143) — suggestive, not decided. Duplicate vs heuristic: pi_last -151.2 ±31.9, pi_r020 -110.9 ±32.2 — improved 2.5x from #2's -285.9 and the best of any NFSP artifact, still losing to the heuristic as predicted (design note 8: an equilibrium approximator wins LESS against a max-exploit agent; NOT a promotion criterion, a consistency check). Promotion decision: models/nfsp/nfsp_final.pt = campaign #3 pi_r020.pt (the plugin's default path now resolves; nfsp strategy becomes deployable). NONE of the NFSP checkpoints replaces models/rl/ppo_final.pt — the shipped agent's role is exploiting weak opponents (+604 vs the heuristic); NFSP's claim is the exploitability axis, and the two can be compared head-to-head by anyone with `--a rl --b nfsp`. NEXT (campaign #4, if run): raise the gate from <=0 to a positive margin (e.g. skip BRs whose tail < +100 — the diffuse-winners hypothesis), and re-anchor the ladder at one fixed budget so cross-checkpoint comparisons stop being bound-confounded. |
+| 12 | **campaign #4 (the margin + patience) — step 11's "NEXT" executed; verdict: diffuse winners WERE the late-round poison; quality-over-quantity wins on the direct matched comparison.** `train_nfsp.py` @ `7e29be4` (--margin 100, --patience 4; suite 363->366). Campaign log (models/nfsp_full4.log): early stop after 4 consecutive skips at round 10 — the usable sequence at the +100 standard is rounds 0-6 (tails +1679 -> +141, first skip +97), and from round 7 EVERY round was a skip: the 80-iter oracle never recovers a >=100 win against this Pi at any depth, so patience saved ~35 min of harvest-nothing compute. The on-disk pi_last = 6 moves + 4 stale refits (an isolated skip refits on the unchanged reservoir; only the break stops saving — code comment fixed same commit). THE 2x2 (240-iter probes, resolved, greedy): pi_last@#4 **193.9 +-63.5 (s7) / 465.8 +-70.3 (s11)** vs nfsp_final=r020@#3 **375.2 +-59.2 (s7) / 473.0 +-68.4 (s11)**. Seed 7 favors #4 ~2x (and #4's seed-7 exploiter was the WEAKER curve, +148 vs +289, so its bound is the more pessimistic of the pair); seed 11 the two are within noise (465.8 vs 473.0). Duplicate vs heuristic -106.3 +-34.8, best of any NFSP artifact (still losing, per design note 8). Interpretation: the matched-budget ladder's r020->r030 regression (375->674) was caused by exactly the +3..+52 BR band the margin now clips — removing it costs 13 moves' worth of quantity but loses nothing, sometimes 2x. The seed-11 equality means the honest claim is "at least as good at half the usable rounds, with a documented stop rule", not "#4 is 2x better". PPO@240 re-anchor s7 792.8, s11 1006.2 +-63.6 (curve +956 — the 120-iter s11 number 176.3 was a weak-exploiter artifact, retroactively vindicating the probe-strength caveat). MATCHED-BUDGET VERDICT: nfsp_final beats the shipped PPO on BOTH seeds at 240-iter probes: 193.9 vs 792.8 (4.1x, s7) and 465.8 vs 1006.2 (2.1x, s11) — the pre-registered success condition passes seed-matched at one budget everywhere. Promotion: nfsp_final.pt RE-POINTED to campaign #4 pi_last (s7 strictly better at matched budget and probe-harder; s11 tie; duplicate better; and it is the run whose stop rule is the method's — the ladder-B story ends with 6 moves, not 30). models/nfsp_campaign4/ kept. Campaign #5 if ever: raise iters to 120+ so the oracle keeps producing >=100 moves past round 7 — the margin proved the ceiling is the ORACLE, not the average. |
+
+Ladder choice (design note section 4): **ladder B first** — fictitious self-play
+with a PPO best response, reusing `exploit.py:best_response` as the oracle. No
+DQN, ~150 lines, code that is already debugged. Ladder A (faithful DQN +
+reservoir NFSP) only if B's exploitability curve flattens too high.
+
+Success condition, stated before the run: `exploit.py --target nfsp` well below
+670.6. It is **not** beating the PPO agent head-to-head — an equilibrium
+approximator should lose to a max-exploit agent against weak opposition and win
+less against the calling station and the maniac.
+
+### 0.7 Local artifacts — none of this is in git
+
+`models/` is gitignored in full. On this machine:
+
+| path | what |
+|---|---|
+| `models/rl/` | **the shipped agent**: obs 160, no history, seed 7. What `plugin.py` loads. |
+| `models/rl_history/` | history arm, seed 7 (+461.76 / 192.3). The retracted-outlier one. |
+| `models/ab/s11_hist`, `s11_nohist` | seed 11 pair (+514.46 / 553.2 and +581.80 / 609.7) |
+| `models/ab/s23_hist`, `s23_nohist` | seed 23 pair (+297.64 and +658.72; both probes FAILED) |
+| `models/rl_carry`, `rl_leak`, `rl_v1`, `rl_v2` | older agents from previous sessions |
+| `models/nfsp/` | **nfsp_final.pt = campaign #4 pi_last (round 9: 6 margin-qualified moves + stale refits; plugin default path; 193.9 ±63.5 / 465.8 ±70.3 at 240-iter probes — least exploitable artifact measured)** |
+| `models/nfsp_campaign4/` | the margin+patience run: pi_last (= nfsp_final) + pi_r010 |
+| `models/nfsp_campaign3/` | campaign #3 (clip-at-0 gate): pi_last 673.9@240 + nfsp_final's predecessor pi_r020 (375.2/473.0@240) |
+| `models/nfsp_campaign2/` | campaign #2 (ungated) — the 737.5 pi_last + the r010/r020 ladder that diagnosed the collapse |
+| `models/nfsp_campaign1/` | the coin-flip Pi (negative evidence, kept on purpose) |
+| `models/nfsp_campaign2_partial/` | round-7 checkpoint of the campaign the reboot killed |
+| `models/nfsp_full2.log`, `nfsp_probe2.log`, `nfsp_probe_s11.log`, `ppo_probe_s11.log`, `nfsp_dup.log`, `nfsp_dup_r020.log`, `nfsp_entropy_diag.log`, `nfsp_probe_r0{10,20}{,_s11}.log` | the step-10 measurement trail + the entropy/oracle-starvation diagnostic |
+| `models/nfsp_full3.log`, `nfsp_probe3_s{7,11}.log`, `nfsp_probe3_r0{10,20}.log`, `nfsp_probe3_r020_s11.log`, `nfsp_probe3_r020_big.log`, `nfsp_dup3*.log` | campaign #3: the gate's verdict trail |
+| `models/nfsp_full4.log`, `nfsp_probe4_big_s{7,11}.log`, `nfsp_dup4.log`, `nfsp_probe3_r020_big_s11.log`, `nfsp_probe3_last_big.log`, `nfsp_probe2_r020_big.log`, `ppo_probe240_s{7,11}.log` | campaign #4: margin+patience verdict, the matched 2x2, both PPO re-anchors |
+| `models/rlcard_dqn/` | the external DQN baseline |
+
+A fresh clone has none of them. Re-training one arm is ~34 min at 8 workers;
+the full three-seed campaign was ~2h45m end to end (train 34 min, duplicate
+1.5 min, probe 4-6 min per arm).
+
+The campaign script is not in the repo either — it was a scratch file. Its
+shape is in section 0.4 and it is ~20 lines to rewrite.
+
+### 0.8 Gotchas found this session
+
+- **`models/` is gitignored.** `models/rl_history/` (the history arm, 11 MB)
+  exists only on this machine. Re-training it is 35 min.
+- Two `tests/test_league.py` tests build a real `RLStrategy` from a stub net and
+  needed a real `obs_dim`; the other seven stubs never encode and were left at
+  `obs_dim=16`.
+- Do not wait on a background job with `until ! pgrep -f "pokr.duplicate"` —
+  the waiter's own command line contains the pattern, so it matches itself and
+  never exits.
+- The venv is `.venv/` and is NOT on the default `python3`. Use
+  `.venv/bin/python`.
 
 ---
 

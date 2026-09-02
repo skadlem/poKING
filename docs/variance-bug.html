@@ -1,0 +1,406 @@
+<title>The 2,800× Variance Bug</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+  :root {
+    --bg:        #F1F2F4;
+    --surface:   #FAFBFC;
+    --ink:       #15181C;
+    --muted:     #5C646E;
+    --rule:      #D8DCE1;
+    --signal:    #1B6E8C;
+    --signal-dim:#1B6E8C22;
+    --warn:      #9A5B22;
+    --warn-dim:  #9A5B2220;
+    --measure: 66ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:        #0E1114;
+      --surface:   #161A1F;
+      --ink:       #E6E9ED;
+      --muted:     #939CA6;
+      --rule:      #262C33;
+      --signal:    #5AB3CE;
+      --signal-dim:#5AB3CE24;
+      --warn:      #C98F4E;
+      --warn-dim:  #C98F4E22;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:        #0E1114;
+    --surface:   #161A1F;
+    --ink:       #E6E9ED;
+    --muted:     #939CA6;
+    --rule:      #262C33;
+    --signal:    #5AB3CE;
+    --signal-dim:#5AB3CE24;
+    --warn:      #C98F4E;
+    --warn-dim:  #C98F4E22;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 18px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: clamp(2.5rem, 6vw, 5rem) clamp(1.15rem, 4vw, 2rem) 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2.1rem;
+  }
+
+  /* ---- masthead ---- */
+  .eyebrow {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0;
+  }
+  h1 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700;
+    font-size: clamp(2.3rem, 7vw, 3.6rem);
+    line-height: 1.02;
+    letter-spacing: -0.033em;
+    text-wrap: balance;
+    margin: 0.6rem 0 0;
+  }
+  .standfirst {
+    font-size: 1.2rem;
+    line-height: 1.5;
+    color: var(--muted);
+    margin: 1.1rem 0 0;
+    max-width: 34rem;
+  }
+  .byline {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.74rem;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    border-top: 1px solid var(--rule);
+    padding-top: 0.85rem;
+    margin: 1.9rem 0 0;
+  }
+  .byline a { color: var(--signal); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  /* ---- section headings ---- */
+  h2 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 600;
+    font-size: 1.42rem;
+    letter-spacing: -0.018em;
+    line-height: 1.2;
+    text-wrap: balance;
+    margin: 1.6rem 0 0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+  }
+  h2 .step {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--signal);
+    letter-spacing: 0.08em;
+    flex: none;
+    padding-top: 0.15rem;
+  }
+  h3 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 600;
+    font-size: 1.02rem;
+    letter-spacing: -0.005em;
+    margin: 1.1rem 0 -1rem;
+  }
+  p { margin: 0; max-width: var(--measure); }
+  p + p { margin-top: -0.5rem; }
+  a { color: var(--signal); }
+  strong { font-weight: 600; }
+  code {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.855em;
+    background: var(--signal-dim);
+    padding: 0.1em 0.34em;
+    border-radius: 2px;
+  }
+
+  /* ---- error-bar figure ---- */
+  figure { margin: 0; }
+  .fig-shell {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 1.5rem 1.4rem 1.2rem;
+  }
+  .fig-shell svg { display: block; width: 100%; height: auto; }
+  figcaption {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.73rem;
+    line-height: 1.55;
+    color: var(--muted);
+    margin-top: 0.95rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--rule);
+  }
+  .lbl {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 11px;
+    fill: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .lbl-strong { fill: var(--ink); font-weight: 600; }
+  .axis { stroke: var(--rule); stroke-width: 1; }
+  .zero { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.55; }
+
+  /* ---- data tables ---- */
+  .scroller { overflow-x: auto; margin-inline: calc(clamp(1.15rem, 4vw, 2rem) * -0.5); padding-inline: calc(clamp(1.15rem, 4vw, 2rem) * 0.5); }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 30rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.79rem;
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    text-align: left;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.71rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: 0.7rem;
+  }
+  th, td { padding: 0.52rem 0.85rem 0.52rem 0; text-align: right; border-bottom: 1px solid var(--rule); }
+  th:first-child, td:first-child { text-align: left; padding-right: 1.2rem; }
+  thead th { color: var(--muted); font-weight: 400; border-bottom-color: var(--ink); }
+  tbody tr:last-child td { border-bottom: none; }
+  .tag { font-size: 0.72rem; letter-spacing: 0.04em; }
+  .unres { color: var(--warn); }
+  .res { color: var(--signal); font-weight: 600; }
+  .gain { font-weight: 600; }
+
+  /* ---- pull quote / lesson ---- */
+  .lede {
+    border-left: 2px solid var(--signal);
+    padding: 0.1rem 0 0.1rem 1.15rem;
+    font-size: 1.1rem;
+    line-height: 1.5;
+    max-width: 33rem;
+  }
+  ul { margin: 0; padding-left: 1.1rem; max-width: var(--measure); display: flex; flex-direction: column; gap: 0.7rem; }
+  li::marker { color: var(--signal); }
+
+  pre {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.79rem;
+    line-height: 1.6;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 2px solid var(--warn);
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    margin: 0;
+  }
+  pre .cm { color: var(--muted); }
+
+  hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
+  .foot { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.73rem; color: var(--muted); line-height: 1.6; }
+  .foot a { color: var(--signal); }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+  :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Measurement · Poker · Reinforcement learning</p>
+    <h1>The 2,800× Variance&nbsp;Bug</h1>
+    <p class="standfirst">Two rows of my poker benchmark never resolved, no matter how many hands I ran. I assumed I needed a better estimator. I needed a better instrument.</p>
+    <p class="byline">pokr — a 6-max No-Limit Hold'em engine, heuristic bot, and in-engine PPO agent · <a href="https://github.com/skadlem/poKING">github.com/skadlem/poKING</a></p>
+  </header>
+
+  <p>Poker win rates are measured in <strong>bb/100</strong> — big blinds won per hundred hands. The number is easy to compute and almost meaningless without an error bar, because the variance is enormous: most hands are worth a couple of blinds and a rare few are worth a whole stack.</p>
+
+  <p>My benchmark ran six matchups over 2,000 hands each and reported bb/100 with a standard error. Two rows had been statistically unresolved for the project's entire history — the error bar was wider than the estimate, so the sign of the result wasn't even established:</p>
+
+  <figure>
+    <div class="fig-shell">
+      <svg viewBox="0 0 640 168" role="img" aria-label="Error bars for the maniac matchup before and after the fix, drawn to the same scale. Before: plus 3,411 with a 2-standard-error interval from minus 10,630 to plus 17,452, crossing zero. After: plus 290 with an interval from plus 26 to plus 554, a sliver clear of zero.">
+        <!-- scale: -11500 .. 18500 mapped to x 96 .. 624 -->
+        <line class="axis" x1="96" y1="132" x2="624" y2="132"></line>
+        <line class="zero" x1="298" y1="24" x2="298" y2="132"></line>
+        <text class="lbl" x="298" y="150" text-anchor="middle">0</text>
+        <text class="lbl" x="96" y="150" text-anchor="start">−11.5k</text>
+        <text class="lbl" x="624" y="150" text-anchor="end">+18.5k</text>
+        <text class="lbl" x="360" y="164" text-anchor="middle">bb/100, ±2 SE, same scale</text>
+
+        <!-- BEFORE: +3411, 2SE = 14041 -> -10630 .. 17452 -->
+        <text class="lbl lbl-strong" x="88" y="52" text-anchor="end">carry-over</text>
+        <line x1="111" y1="48" x2="605" y2="48" stroke="var(--warn)" stroke-width="7" opacity="0.3"></line>
+        <line x1="111" y1="36" x2="111" y2="60" stroke="var(--warn)" stroke-width="2"></line>
+        <line x1="605" y1="36" x2="605" y2="60" stroke="var(--warn)" stroke-width="2"></line>
+        <circle cx="358" cy="48" r="4.5" fill="var(--warn)"></circle>
+        <text class="lbl" x="358" y="26" text-anchor="middle" fill="var(--warn)">+3,411 ± 14,041 — unresolved</text>
+
+        <!-- AFTER: +290, 2SE = 264 -> 26 .. 554 -->
+        <text class="lbl lbl-strong" x="88" y="104" text-anchor="end">fixed depth</text>
+        <line x1="298" y1="100" x2="308" y2="100" stroke="var(--signal)" stroke-width="7" opacity="0.35"></line>
+        <line x1="298" y1="90" x2="298" y2="110" stroke="var(--signal)" stroke-width="2"></line>
+        <line x1="308" y1="90" x2="308" y2="110" stroke="var(--signal)" stroke-width="2"></line>
+        <circle cx="303" cy="100" r="4.5" fill="var(--signal)"></circle>
+        <text class="lbl" x="330" y="104" text-anchor="start" fill="var(--signal)">+290 ± 264 — resolved</text>
+      </svg>
+    </div>
+    <figcaption>The same matchup, the same 2,000 hands, the same bot. Only the stack-reset rule changed. The old interval is 53× wider and straddles zero; the point estimate moved by a factor of twelve.</figcaption>
+  </figure>
+
+  <p>The obvious diagnosis is "run more hands." Standard error falls as 1/√n, so 25× the hands buys a 5× tighter bar. That is a fine answer when your estimator is sound. Mine wasn't, and running more hands would have converged, slowly and expensively, on a number that was still wrong.</p>
+
+  <h2><span class="step">01</span> The fix that didn't work</h2>
+
+  <p>Poker's standard variance reduction is <strong>duplicate scoring</strong>, borrowed from duplicate bridge: deal one shuffled deck, play it twice with the two players swapping seats, and score the difference. Both players hold both hands, so the deal's luck cancels and what remains is the decisions. In bridge this buys 5–10×.</p>
+
+  <p>I implemented it. It bought <strong>1.0×</strong>.</p>
+
+  <p>My first version had the two players in separate games against a common lineup — same cards, no swap. Their outcomes turned out to be nearly uncorrelated (ρ = +0.10), because how you play moves more chips than what you hold. So I rebuilt it properly, with both players at the same table and the seats swapped between runs.</p>
+
+  <p>That bought <strong>1.1×</strong>.</p>
+
+  <p>At this point I stopped guessing and measured the correlation the technique depends on. A player's two mirrored hands correlate at only ρ = −0.131, which predicts a reduction of 1/√(1+ρ) = 1.07× — exactly what I was seeing. Then the reason showed up in the distribution:</p>
+
+  <p class="lede">85% of hands finish under 4bb, and the top 1% of hands carry 42% of the total variance.</p>
+
+  <p>Those big pots are the variance. And they only exist when <em>both</em> players choose to build one — so they don't mirror across the swap. Duplicate bridge works because every deal is played to completion at both tables. Duplicate hold'em doesn't, because a hand only becomes expensive if two people agree to make it expensive.</p>
+
+  <h2><span class="step">02</span> The second fix that didn't work either</h2>
+
+  <p>If the variance lives in all-in pots, target those directly. <strong>All-in EV</strong> is the standard tracker technique: when players get all in before the board is complete, replace the realized runout with its expectation over every possible completion. Exact enumeration where the combinatorics allow, Monte Carlo above that.</p>
+
+  <p>This one is unbiased and genuinely correct — over 4,000 hands the adjusted and realized means differ by 39 bb/100 against a 2 SE of 240. It bought between <strong>1.00× and 1.23×</strong>, depending entirely on how often a matchup produces a pre-river all-in. In one matchup it bought exactly nothing, because the heuristic bot caps its bets at ⅔ pot and simply never gets there: 0% of hands were adjustable.</p>
+
+  <p>Two textbook techniques, correctly implemented, both worth almost nothing. That was the point at which I stopped looking at estimators and started looking at the harness.</p>
+
+  <h2><span class="step">03</span> The actual bug</h2>
+
+  <p>Between hands, the benchmark tops up any player who busted:</p>
+
+<pre><span class="cm"># pokr/bench.py</span>
+def _rebuy(stacks, buy_in):
+    return [buy_in if s &lt;= 0 else s for s in stacks]</pre>
+
+  <p>It tops up losers. It never caps winners. So chips are injected into the table and never removed, and stack depth ratchets upward across a session. Measured with the project's own scripted bots — no learned agent involved, nothing exotic:</p>
+
+  <div class="scroller">
+    <table>
+      <caption>Six calling stations, 2,000 hands, 100bb buy-in</caption>
+      <thead><tr><th>after hand</th><th>chips in play</th><th>largest stack</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>1,200</td><td>105 bb</td></tr>
+        <tr><td>500</td><td>1,400</td><td>208 bb</td></tr>
+        <tr><td>1,999</td><td>1,600</td><td class="unres">293 bb</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Every benchmark I had ever run was playing its later hands two to three times deeper than the 100bb it claimed. Deep-stack pots are bigger pots, bigger pots are more variance, and the effect compounds over a session — which is precisely why the wildest opponents (a maniac, a random bot) had the least resolvable rows. The variance wasn't a property of the game. It was being manufactured by the harness.</p>
+
+  <h2><span class="step">04</span> What fixing it was worth</h2>
+
+  <p>One flag — reset every hand to the buy-in — applied to the same seed, the same 2,000 hands, the same bot:</p>
+
+  <div class="scroller">
+    <table>
+      <caption>bb/100 ± 2 SE, and per-hand variance in bb²</caption>
+      <thead>
+        <tr><th>matchup</th><th>carry-over</th><th>fixed depth</th><th>variance</th><th></th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>maniac</td>
+          <td class="unres">+3,411 ± 14,041</td>
+          <td class="res">+290 ± 264</td>
+          <td>9.86M → 3.5k</td>
+          <td class="gain">2,800×</td>
+        </tr>
+        <tr>
+          <td>random</td>
+          <td class="unres">+5,426 ± 4,002</td>
+          <td class="res">+352 ± 218</td>
+          <td>801k → 2.4k</td>
+          <td class="gain">338×</td>
+        </tr>
+        <tr>
+          <td>self-play</td>
+          <td>−340 ± 349</td>
+          <td>−52 ± 167</td>
+          <td>6.1k → 1.4k</td>
+          <td class="gain">4.4×</td>
+        </tr>
+        <tr>
+          <td>calling station</td>
+          <td>+683 ± 247</td>
+          <td>+518 ± 165</td>
+          <td>3.1k → 1.4k</td>
+          <td class="gain">2.2×</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Both unresolved rows resolve at 2,000 hands. But look at the estimates, not just the bars. <strong>+3,411 became +290.</strong> The old number wasn't a noisy measurement of the true win rate — it was mostly the compounding of deep-stack pots, which is a different quantity. A wrong error bar had been hiding a wrong point estimate, and the wide bar was the only reason nobody had acted on the wrong number.</p>
+
+  <h2><span class="step">05</span> The part I hadn't seen coming</h2>
+
+  <p>The project also has a PPO agent that trains inside the same engine. Training used the carry-over harness. Evaluation used the fixed-depth one. So the agent was <em>trained</em> at 200–300bb and <em>scored</em> at 100bb, and nobody had noticed, because both halves looked internally consistent.</p>
+
+  <p>The tell came from an unrelated tool. I train a throwaway agent against a frozen opponent to estimate how exploitable it is; that exploiter reached <strong>+1,282 bb/100 during training</strong> and scored <strong>−759 at evaluation</strong>. The same policy, measured twice, off by two thousand bb/100. It had learned deep-stack poker and was being examined on a different game.</p>
+
+  <p>Matching the two depths fixed the contradiction — training curve and evaluation now agree — and then improved the agent itself, on both axes at once:</p>
+
+  <div class="scroller">
+    <table>
+      <caption>PPO agent, before and after matching training depth to evaluation depth</caption>
+      <thead><tr><th></th><th>vs. the heuristic, heads-up</th><th>exploitability ↓</th></tr></thead>
+      <tbody>
+        <tr><td>carry-over depth</td><td>+180.4 ± 32.6</td><td>879.4 ± 101.5</td></tr>
+        <tr><td>fixed depth</td><td class="res">+604.0 ± 36.1</td><td class="res">670.6 ± 68.8</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2><span class="step">06</span> A second instrument, also broken</h2>
+
+  <p>While I was measuring measurements, I checked the one I'd been using for exploitability. The project ships a hand-written adaptive opponent — a "leak hunter" that models your frequencies and counter-adjusts — and it rated the heuristic bot as nearly unexploitable: <strong>+14.8 bb/100</strong> in the bot's favour.</p>
+
+  <p>A best response trained from scratch takes <strong>1,019.7 bb/100</strong> off the same bot. The proxy was under-reporting by about 70×, because it only knows a handful of counter-rules and can't find leaks it wasn't written to look for.</p>
+
+  <p>Worse, I tried the obvious thing: put the leak hunter in the training pool so the agent learns not to be readable. It flipped that column exactly as intended, from −136 to +1,203 — and made the agent <strong>nearly twice as exploitable</strong> by a real best response, 879 → 1,294. It had learned to beat one specific counter-strategy at the cost of general robustness. That is what training on your own test set looks like when the test set is a bot.</p>
+
+  <h2><span class="step">07</span> What I'd take from it</h2>
+
+  <ul>
+    <li><strong>Variance-reduction techniques have game-specific payoffs.</strong> Duplicate scoring is worth 5–10× in bridge and 1.1× here, for a reason you can measure in an afternoon. The literature's number is not your number.</li>
+    <li><strong>The instrument is code, and nobody tests it.</strong> I had 120 passing tests on the engine, the hand evaluator, and the policy. Zero on the benchmark harness — which is the component every conclusion passes through.</li>
+    <li><strong>A wide error bar can hide a wrong estimate.</strong> "Unresolved" felt like a known unknown I could fix with more compute. It was actually concealing a point estimate that was off by 12×.</li>
+    <li><strong>Train and score on the same distribution, and check that you do.</strong> The mismatch here was one boolean, invisible in both halves, and worth 3.3× the agent's win rate.</li>
+  </ul>
+
+  <hr>
+
+  <p class="foot">Everything above is reproducible from the repo: <code>python -m pokr.bench --hands 2000 --seed 7 --mc-iters 10 --fast</code> for the old numbers, <code>--reset-stacks</code> for the new ones. The duplicate-deck evaluator, the all-in EV adjustment, and the best-response probe are in <code>pokr/duplicate.py</code>, <code>pokr/allin_ev.py</code>, and <code>pokr/rl/exploit.py</code> — each carrying the measured payoff and the dead ends in its docstring, so the next person doesn't rediscover them.<br><br>Worth stating plainly: the agent is still ~670 bb/100 exploitable, which is catastrophic in absolute terms — a best response wins about 6.7 big blinds per hand. Nothing here is near equilibrium. The claim is that it is measured honestly, not that it is good.</p>
+
+</div>

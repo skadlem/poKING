@@ -41,6 +41,10 @@ MAX_SEATS = 6
 _STREETS = ("preflop", "flop", "turn", "river")
 _SEAT_FEATURES = 6
 
+# Betting history: two aggressor one-hots (relative seat, last slot = "nobody")
+# plus two raise counts. See _history_block for why this block exists at all.
+_HISTORY_FEATURES = 2 * (MAX_SEATS + 1) + 2
+
 _LAYOUT: tuple[tuple[str, int], ...] = (
     ("hole", 52),                                 # multi-hot hole cards
     ("board", 52),                                # multi-hot community cards
@@ -50,8 +54,14 @@ _LAYOUT: tuple[tuple[str, int], ...] = (
     ("position", MAX_SEATS + 1),                  # seat vs button + to-act
     ("equity", 2),                                # MC equity + present flag
     ("opponent", 6),                              # target opponent model
+    ("history", _HISTORY_FEATURES),               # who bet, and how often
 )
 OBS_DIM = sum(n for _, n in _LAYOUT)
+# The layout before the history block was added. It is a strict PREFIX of the
+# current one, so obs[:OBS_DIM_V1] is byte-identical to what a pre-history
+# checkpoint was trained on -- which is the only reason those checkpoints
+# (models/rl/ppo_final.pt, every number in the README) still run.
+OBS_DIM_V1 = OBS_DIM - _HISTORY_FEATURES
 
 _offsets: dict[str, slice] = {}
 _pos = 0
@@ -147,11 +157,60 @@ def decode(state: GameState, player_id: int, action_idx: int) -> Action:
 # -- observation ----------------------------------------------------------
 
 
+_AGGRESSIVE = (ActionType.BET, ActionType.RAISE)
+
+
+def _history_block(state: GameState, player_id: int, out: np.ndarray) -> None:
+    """Who showed aggression, and how often. Writes _HISTORY_FEATURES values.
+
+    Without this the observation is not an information state. Everything else
+    in the encoding is a snapshot of chip positions, and two different betting
+    lines that arrive at the same chip positions encode identically: heads-up,
+    "SB limps, BB raises to 6, SB calls" and "SB raises to 6, BB calls" produce
+    a byte-identical flop observation -- same pot, same committed, acted_round
+    cleared by the street change. Who raised preflop is the single most
+    range-informative bit in poker and it was simply absent.
+
+    Aggressor slots are one-hot over RELATIVE seat, matching the seats block's
+    convention: index 0 is the hero, index j is the player at
+    (player_id + j) % n. The final slot means "nobody" -- a limped pot preflop,
+    or a street with no bet yet.
+
+    Blinds are deliberately not counted as raises: the engine posts them
+    through _chips_in, which does not append to action_history, so a preflop
+    raise count here is a count of voluntary raises.
+    """
+    n = len(state.players)
+    pf_aggressor: int | None = None
+    street_aggressor: int | None = None
+    pf_raises = 0
+    street_raises = 0
+    for pid, street, action in state.action_history:
+        if action.action_type not in _AGGRESSIVE:
+            continue
+        if street == "preflop":
+            pf_aggressor = pid
+            pf_raises += 1
+        if street == state.street:
+            street_aggressor = pid
+            street_raises += 1
+
+    width = MAX_SEATS + 1
+    for offset, who in ((0, pf_aggressor), (width, street_aggressor)):
+        slot = MAX_SEATS if who is None else (who - player_id) % n
+        out[offset + slot] = 1.0
+    # Capped at 4: the difference between a 4-bet and a 6-bet pot is not worth
+    # a feature, and the cap keeps the scale bounded when a maniac reraises.
+    out[2 * width] = min(street_raises, 4) / 4.0
+    out[2 * width + 1] = min(pf_raises, 4) / 4.0
+
+
 def encode_obs(
     state: GameState,
     player_id: int,
     equity: float | None = None,
     opponent: OpponentSummary | None = None,
+    history: bool = True,
 ) -> np.ndarray:
     """GameState -> float32 vector of length OBS_DIM.
 
@@ -159,8 +218,14 @@ def encode_obs(
         pokr._fastcards), or None when the caller skipped it.
     opponent: model summary of the opponent whose range we are facing (see
         PokerBot._target_opponent), or None when unmodelled.
+    history: include the betting-history block. False emits the pre-history
+        layout (OBS_DIM_V1), which is what checkpoints trained before this
+        block expect; since the block is appended last, the two encodings agree
+        byte-for-byte on their common prefix. Callers should not set this by
+        hand -- RLStrategy infers it from the network's own obs_dim.
     """
-    obs = np.zeros(OBS_DIM, dtype=np.float32)
+    dim = OBS_DIM if history else OBS_DIM_V1
+    obs = np.zeros(dim, dtype=np.float32)
     me = state.players[player_id]
     n = len(state.players)
     start_stack = float(me.stack + me.committed) or 1.0
@@ -219,4 +284,6 @@ def encode_obs(
             opponent.fold_rate_postflop,
             min(opponent.hands_observed / 100.0, 1.0),
         ]
+    if history:
+        _history_block(state, player_id, obs[OBS_SLICES["history"]])
     return obs
