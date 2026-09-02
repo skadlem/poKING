@@ -170,6 +170,41 @@ def test_gate_flag_reproduces_the_old_behaviour():
     assert train_nfsp.round_weight(-25.0, 18, gate=False) == 19.0
 
 
+# -- campaign #4: the positive margin ------------------------------------------
+
+def test_margin_skips_barely_winning_brs():
+    """Campaign #3's matched-budget ladder (375.2 -> 673.9) said tails of
+    +3..+52 are diffuse mid-training policies, not moves: the margin must
+    skip them while a real BR (campaign #2's early +1679-class tails)
+    still enters."""
+    assert train_nfsp.round_weight(52.0, 22, margin=100.0) == 0.0
+    assert train_nfsp.round_weight(100.0, 22, margin=100.0) == 0.0  # <=
+    assert train_nfsp.round_weight(150.0, 22, margin=100.0) == 23.0
+
+
+def test_margin_default_preserves_campaign3_behaviour():
+    assert train_nfsp.round_weight(52.0, 22) == 23.0     # margin=0: harvests
+    assert train_nfsp.round_weight(52.0, 22, margin=0.0) == 23.0
+
+
+def test_patience_stops_a_skip_streak(tmp_path):
+    """An unreachable margin makes every round after the exempt round 0 a
+    skip; patience=2 must end the loop early — each skipped round otherwise
+    pays the full oracle cost to harvest nothing. The stats list is the
+    contract: 4 requested, exactly 3 run (r0 harvest, r1+r2 skip -> stop)."""
+    stats = train_nfsp.train(
+        rounds=4, iters_per_round=8, hands_per_iter=40,
+        capacity=300, burn_in=0.75, margin=1e9, patience=2,
+        fit_epochs=3, fit_batch=32, lr=3e-3, max_fit_rows=10_000,
+        hidden=(32, 32), ckpt_dir=str(tmp_path), seed=11, quiet=True,
+        br_cfg=PPOConfig(minibatch=32))
+    assert len(stats) == 3
+    assert stats[0].skipped is False and stats[0].rows > 0
+    assert stats[1].skipped and stats[2].skipped
+    assert (tmp_path / "pi_last.pt").exists(), \
+        "the last-harvested net must survive an early stop"
+
+
 def test_gated_skip_leaves_the_reservoir_intact(gated_run):
     """End-to-end: a round whose BR loses to Pi harvests NOTHING, and the
     fit that follows runs on the previous rounds' rows instead of being

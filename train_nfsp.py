@@ -90,9 +90,9 @@ class RoundStat:
     skipped: bool = False    # gate: br_bb100 <= 0 -> zero rows harvested
 
 
-def round_weight(br_tail_bb100: float, r: int,
-                 gate: bool = True) -> float:
-    """The round's fictitious-play weight (campaign #3 fix).
+def round_weight(br_tail_bb100: float, r: int, gate: bool = True,
+                 margin: float = 0.0) -> float:
+    """The round's fictitious-play weight (campaign #3 gate + #4 margin).
 
     A policy that loses to Pi is not a best response — the oracle
     was starved (HANDOFF 0.6 step 10: campaign #2's losing rounds 18-29
@@ -105,12 +105,18 @@ def round_weight(br_tail_bb100: float, r: int,
     averaging, and the fictitious-play sequence is a sequence of MOVES,
     not of magnitudes.
 
+    `margin` (campaign #4): the matched-budget re-probe showed campaign
+    #3's late rounds still degraded Pi (r020 375.2 -> pi_last 673.9 at
+    240-iter probes) because BRs whose tails barely cleared zero (+3..
+    +52) are diffuse mid-training policies — a win that small is not a
+    best response either. Rounds with tail <= margin contribute nothing.
+
     Round 0 is exempt: an empty reservoir cannot be fitted (fit() raises
     on it by contract), and a round-0 BR failing to beat a random-init Pi
     is a broken campaign, not a policy to protect the average from."""
     if r == 0:
         return 1.0
-    if gate and br_tail_bb100 <= 0.0:
+    if gate and br_tail_bb100 <= margin:
         return 0.0
     return float(r + 1)
 
@@ -130,6 +136,8 @@ def train(
     seed: int = 7,
     quiet: bool = False,
     gate: bool = True,
+    margin: float = 0.0,
+    patience: int = 0,
     br_cfg: PPOConfig | None = None,
 ) -> list[RoundStat]:
     if not 0.0 <= burn_in < 1.0:
@@ -156,6 +164,7 @@ def train(
 
     stats: list[RoundStat] = []
     t0 = time.time()
+    streak = 0                       # consecutive skips (for --patience)
     for r in range(rounds):
         # The gate reads the round's FINAL curve, which does not exist until
         # best_response returns — so the burn-in-passed episodes are held
@@ -180,7 +189,7 @@ def train(
             eval_hands=0, cfg=br_cfg, harvest=harvest, model_opponents=False)
         curve = report.curve
         tail = sum(curve[-10:]) / len(curve[-10:])
-        w = round_weight(tail, r, gate=gate)
+        w = round_weight(tail, r, gate=gate, margin=margin)
         if w > 0:
             for ep in pending:
                 player.record_episode(ep, weight=w)    # br_mode=True rows
@@ -193,14 +202,27 @@ def train(
             print(f"round {r:>3} | BR curve {st.br_first_bb100:+8.1f} -> "
                   f"{st.br_bb100:+8.1f} bb/100 | rows {st.rows:>9,}"
                   f" | fit loss {st.fit_loss:.4f}"
-                  f" | {'SKIP w=0' if st.skipped else f'w={w:g}'}"
+                  f" | {'SKIP' if st.skipped else f'w={w:g}'}"
                   f" | {time.time() - t0:6.0f}s")
+        # Patience (campaign #4): after the margin, a long skip streak means
+        # the oracle can no longer produce moves worth averaging — every
+        # further round pays full BR cost to harvest nothing. Stopping is
+        # honest; the best checkpoint was already saved at the last w>0.
+        if patience > 0 and st.skipped:
+            streak += 1
+            if streak >= patience:
+                if not quiet:
+                    print(f"early stop: {streak} consecutive skips "
+                          f"(--patience {patience}) at round {r}")
+                break
+        else:
+            streak = 0
 
         save_pi(net, str(pdir / "pi_last.pt"), round=r, config={
             "rounds": rounds, "capacity": capacity, "seed": seed,
             "fit_epochs": fit_epochs, "fit_batch": fit_batch, "lr": lr,
             "iters_per_round": iters_per_round, "burn_in": burn_in,
-            "gate": gate},
+            "gate": gate, "margin": margin},
             reservoir_rows=len(buffer), reservoir_weight_sum=buffer.weight_sum)
         if (r + 1) % 10 == 0:
             save_pi(net, str(pdir / f"pi_r{r + 1:03d}.pt"), round=r + 1)
@@ -232,6 +254,15 @@ def main(argv: list[str] | None = None) -> int:
                          "losing BRs included (reproduction flag only — the "
                          "oracle-starvation result is why this is not the "
                          "default)")
+    ap.add_argument("--margin", type=float, default=0.0,
+                    help="skip rounds whose BR tail is <= this, not just "
+                         "<= 0 (campaign #4: barely-winning BRs are still "
+                         "diffuse mid-training policies; 100 is the tested "
+                         "value)")
+    ap.add_argument("--patience", type=int, default=0,
+                    help="stop after this many consecutive skips (0 = run "
+                         "all rounds; a skip streak means the oracle can no "
+                         "longer produce moves worth averaging)")
     ap.add_argument("--fit-epochs", type=int, default=20)
     ap.add_argument("--fit-batch", type=int, default=1024)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -241,7 +272,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     train(rounds=args.rounds, iters_per_round=args.iters,
           hands_per_iter=args.hands_per_iter, capacity=args.capacity,
-          burn_in=args.burn_in, gate=args.gate,
+          burn_in=args.burn_in, gate=args.gate, margin=args.margin,
+          patience=args.patience,
           fit_epochs=args.fit_epochs, fit_batch=args.fit_batch, lr=args.lr,
           max_fit_rows=args.max_fit_rows,
           ckpt_dir=args.ckpt_dir, seed=args.seed, quiet=args.quiet)
