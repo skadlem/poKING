@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pokr social preview</title>
+<style>
+  html,body{margin:0;padding:0;width:1200px;height:630px;overflow:hidden}
+  body{background:#141210;color:#e6e1d7;font-family:'Segoe UI',system-ui,sans-serif;
+       display:flex;flex-direction:column;justify-content:center;padding:0 72px;box-sizing:border-box}
+  .kicker{font-family:'Cascadia Code',Consolas,monospace;font-size:20px;letter-spacing:.18em;
+          color:#d8a24a;text-transform:uppercase;margin-bottom:14px}
+  h1{font-size:76px;margin:0 0 10px;font-weight:700;letter-spacing:-.01em}
+  h1 .accent{color:#d8a24a}
+  .sub{font-size:27px;color:#b9b1a3;margin-bottom:34px;max-width:980px;line-height:1.35}
+  .cards{display:flex;gap:16px;margin-bottom:30px}
+  .card{width:80px;height:110px;border-radius:12px;background:#f4efe4;color:#1c1a17;
+        font-family:Georgia,'DejaVu Sans',serif;font-weight:700;font-size:34px;position:relative;
+        box-shadow:0 8px 24px rgba(0,0,0,.55);padding:10px 12px;box-sizing:border-box}
+  .card.red{color:#b3261e}
+  .card .corner{font-size:20px;line-height:1}
+  .card .corner.bot{position:absolute;bottom:10px;right:12px;transform:rotate(180deg)}
+  .card .pip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:52px}
+  .stats{display:flex;gap:56px;padding-bottom:20px}
+  .stat .v{font-size:40px;font-weight:700;color:#e6e1d7}
+  .stat .v b{color:#d8a24a;font-weight:700}
+  .stat .l{font-size:19px;color:#948c7e;margin-top:4px;max-width:300px;line-height:1.3}
+  .foot{position:absolute;bottom:26px;right:72px;font-family:Consolas,monospace;font-size:19px;color:#6f675c}
+</style>
+<body>
+  <div class="kicker">6-max No-Limit Hold&#8217;em &#183; research-grade measurement</div>
+  <h1>pokr<span class="accent">.</span></h1>
+  <div class="sub">A poker engine, a PPO agent, and a four-campaign NFSP pipeline &#8212;
+    built to measure a strategy&#8217;s edge honestly under very heavy noise.</div>
+  <div class="cards">
+    <div class="card"><div class="corner">8♣</div><div class="pip">♣</div><div class="corner bot">8♣</div></div>
+    <div class="card"><div class="corner">4♣</div><div class="pip">♣</div><div class="corner bot">4♣</div></div>
+    <div class="card"><div class="corner">9♠</div><div class="pip">♠</div><div class="corner bot">9♠</div></div>
+    <div class="card red"><div class="corner">T♥</div><div class="pip">♥</div><div class="corner bot">T♥</div></div>
+    <div class="card red"><div class="corner">4♥</div><div class="pip">♥</div><div class="corner bot">4♥</div></div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="v">+604 <b>&plusmn;36</b> bb/100</div><div class="l">PPO agent vs the tuned heuristic, duplicate decks</div></div>
+    <div class="stat"><div class="v"><b>2&ndash;4x</b> less exploitable</div><div class="l">NFSP average policy vs the shipped PPO, matched probe budget</div></div>
+    <div class="stat"><div class="v">366 tests <b>&#10003;</b></div><div class="l">every headline seed-replicated or withdrawn</div></div>
+  </div>
+  <div class="foot">github.com/skadlem/poKING</div>
+</body>

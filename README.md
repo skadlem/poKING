@@ -3,6 +3,8 @@
 [![tests](https://github.com/skadlem/poKING/actions/workflows/tests.yml/badge.svg)](https://github.com/skadlem/poKING/actions/workflows/tests.yml)
 [![writeup: the 2,800x variance bug](https://img.shields.io/badge/writeup-the_2%2C800%C3%97_variance_bug-d8a24a)](https://skadlem.github.io/poKING/variance-bug.html)
 
+![pokr — poker engine, PPO agent, NFSP pipeline: +604 ±36 bb/100, 2-4x less exploitable, 366 tests](docs/social-preview.png)
+
 A 6-max No-Limit Hold'em engine, a hand-tuned bot, a PPO agent trained inside
 that engine, and an NFSP (average-policy) pipeline validated against exact
 exploitability on Kuhn — built mainly as an exercise in measuring a strategy's
@@ -151,25 +153,46 @@ rows never resolve.
 The bot can sit at a real 6-max table against a chosen mix of other bots,
 report how it actually played, and replay individual hands:
 
-    python -m pokr.bench --lineup tag,tag,maniac,cs,random --hands 1000 --mc-iters 10 --replay 17
+    python -m pokr.bench --lineup tag,tag,maniac,cs,random --hands 1000 --mc-iters 10 --seed 7 --reset-stacks --replay 341
 
 `--lineup` takes one abbreviation per opponent seat (`cs`, `tag`, `maniac`,
-`random`, `leak`, `self`). The report shows your profit (bb/100), hands won,
-the bot's own VPIP/PFR/aggression/fold stats, and with `--replay N` a
-human-readable transcript of hand N (blinds, every action with its reason,
-board, showdown, net result). Example:
+`random`, `leak`, `self`, `nfsp` — the trained agents included). The report
+shows your profit (bb/100), hands won, the bot's own VPIP/PFR/aggression/fold
+stats, and with `--replay N` a human-readable transcript of hand N — every
+action carries the reason the bot took it. The command above replays this
+hand byte-exactly (the bot bluff-raises preflop, value-bets into a maniac
+re-raise on two streets, and turns a full house to cash a 602 bb pot):
 
     game vs lineup [TightAggressive, TightAggressive, Maniac, CallingStation, RandomBot]  (1000 hands)
-      you: -5703.5 bb total, -570.35 bb/100, won 10.2% of hands, var 608196.0
-      your play: VPIP 52.8%  PFR 16.1%  postflop aggression 0.65  fold-to-cbet 40%  postflop fold 23%
+      you: +2477.5 bb total, +247.75 bb/100, won 3.8% of hands, var 1805.6
+      your play: VPIP 11.4%  PFR 5.0%  postflop aggression 0.57  fold-to-cbet 50%  postflop fold 17%
 
-    --- Hand #17 of 1000 (dealer RandomBot) ---
+    --- Hand #341 of 1000 (dealer RandomBot) ---
       blinds: You(pokr) 1 / TightAggressive 2
       TightAggressive preflop  fold  [tag folds junk]
-      Maniac       preflop  raise 100  [maniac raise]
-      ...
-      CallingStation wins 203 with two pair (Ah Qc)
-      net: You(pokr) -1 TightAggressive -2 TightAggressive +0 Maniac -200 CallingStation +203 RandomBot +0
+      Maniac       preflop  call 2  [maniac call]
+      CallingStation preflop  call 2  [calling station calls]
+      RandomBot    preflop  call 2  [random]
+      You(pokr)    preflop  raise 4  [bluff]
+      TightAggressive preflop  fold  [tag folds junk]
+      Maniac       preflop  call 2  [maniac call]
+      CallingStation preflop  call 2  [calling station calls]
+      RandomBot    preflop  call 2  [random]
+      You(pokr)    flop     bet 5  [value]
+      Maniac       flop     raise 80  [maniac raise]
+      CallingStation flop     call 80  [calling station calls]
+      RandomBot    flop     call 80  [random]
+      You(pokr)    flop     call 75  [risk cap fallback call]
+      You(pokr)    turn     bet 40  [value]
+      Maniac       turn     raise 104  [maniac raise]
+      CallingStation turn     call 104  [calling station calls]
+      RandomBot    turn     raise 116  [random]
+      You(pokr)    turn     call 76  [call]
+      Maniac       turn     call 12  [maniac call]
+      CallingStation turn     call 12  [calling station calls]
+      board: 8c 4c 9s Th 4h
+      You(pokr) wins 602 with full house (9c 9d)
+      net: You(pokr) +602 TightAggressive -2 TightAggressive +0 Maniac -200 CallingStation -200 RandomBot -200
 
 ## Head-to-head on duplicate decks
 
