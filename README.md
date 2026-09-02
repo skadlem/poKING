@@ -5,6 +5,9 @@
 
 ![pokr — poker engine, PPO agent, NFSP pipeline: +604 ±36 bb/100, 2-4x less exploitable, 366 tests](docs/social-preview.png)
 
+*A note on the name: **pokr** is the package (`pokr/`, `python -m pokr.bench`);
+**poKING** is just the repo — the same word with the KING shouting.*
+
 A 6-max No-Limit Hold'em engine, a hand-tuned bot, a PPO agent trained inside
 that engine, and an NFSP (average-policy) pipeline validated against exact
 exploitability on Kuhn — built mainly as an exercise in measuring a strategy's
