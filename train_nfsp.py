@@ -206,8 +206,11 @@ def train(
                   f" | {time.time() - t0:6.0f}s")
         # Patience (campaign #4): after the margin, a long skip streak means
         # the oracle can no longer produce moves worth averaging — every
-        # further round pays full BR cost to harvest nothing. Stopping is
-        # honest; the best checkpoint was already saved at the last w>0.
+        # further round pays full BR cost to harvest nothing. An isolated
+        # skip still refits Pi on the unchanged reservoir (extra epochs on
+        # the same mixture, which only sharpens it) and re-saves; only the
+        # patience BREAK leaves the last-harvested net on disk, which is
+        # why #4's pi_last is "6 moves + stale refits", not round 10.
         if patience > 0 and st.skipped:
             streak += 1
             if streak >= patience:
